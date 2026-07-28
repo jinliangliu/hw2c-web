@@ -2,7 +2,7 @@
 
 export interface ParseResponse {
     status: string
-    mcu:         { part: string; core_clock_mhz: number; ram_kb: number; flash_kb: number; dual_bank: boolean }
+    mcu:         { part: string; core: string; core_clock_mhz: number; ram_kb: number; flash_kb: number; dual_bank: boolean }
     clock?:      ClockConfig
     pins:        PinInfo[]
     peripherals: PeripheralInfo[]
@@ -10,8 +10,45 @@ export interface ParseResponse {
     app_tasks:   AppTaskInfo[]
     annotations: Annotations
     passive_constraints: { summary_text: string }
-    yaml:        string
+    yaml:        string                     /* [DEPRECATED] legacy monolithic */
+    hardware_yaml: string
+    task_yaml:   string
+    bind_yaml:   string
+    project?:    ProjectInfo
+    bind?:       BindInfo
     warning?:    string
+}
+
+export interface ProjectInfo {
+    name: string
+    version: string
+}
+
+export interface BindInterruptInfo {
+    pin: string
+    task: string
+    event: string
+}
+
+export interface BindPeripheralAssignInfo {
+    peripheral: string
+    task: string
+    role: string
+}
+
+export interface BindRoutingInfo {
+    from: string
+    to?: string | null
+    signal: string
+    condition?: string | null
+}
+
+export interface BindInfo {
+    hardware: string
+    task: string
+    interrupt: BindInterruptInfo[]
+    peripheral_assign: BindPeripheralAssignInfo[]
+    routing: BindRoutingInfo[]
 }
 
 export interface PinInfo {
@@ -133,15 +170,22 @@ export async function uploadNetlist(
     return resp.json()
 }
 
-/** POST current YAML → download generated project zip. */
+/** POST current YAMLs → download generated project zip. */
 export async function generateFirmware(
-    yaml: string,
+    hardwareYaml: string,
+    taskYaml: string = '',
+    bindYaml: string = '',
     projectName: string = 'firmware',
 ): Promise<Blob> {
     const resp = await fetch(`${BASE}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml, project_name: projectName }),
+        body: JSON.stringify({
+            hardware_yaml: hardwareYaml,
+            task_yaml: taskYaml,
+            bind_yaml: bindYaml,
+            project_name: projectName,
+        }),
     })
     if (!resp.ok) {
         const text = await resp.text()

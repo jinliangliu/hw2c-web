@@ -15,6 +15,7 @@ import { load, dump } from 'js-yaml'
 
 export interface McuModel {
     part: string
+    core: string
     core_clock_mhz: number
     ram_kb: number
     flash_kb: number
@@ -68,6 +69,59 @@ export interface SleepModel {
     mode: string
 }
 
+// ---------------------------------------------------------------------------
+// Complex type definitions (business_flow.types)
+// ---------------------------------------------------------------------------
+
+export interface StructField {
+    name: string
+    /** C type; omit for nested struct (detected by 'fields' presence) */
+    type?: string
+    array?: number
+    /** Nested struct fields (level 2 only) */
+    fields?: StructField[]
+}
+
+export interface EnumValue {
+    name: string
+    value: number
+}
+
+export interface UnionField {
+    name: string
+    type: string
+    array?: number
+}
+
+export interface BitfieldField {
+    name: string
+    width: number
+}
+
+export interface CustomTypeDef {
+    name: string
+    struct?: StructField[]
+    enum?: EnumValue[]
+    union?: UnionField[]
+    bitfield?: BitfieldField[]
+}
+
+export interface BusinessFlowModel {
+    initial_state?: string
+    types?: CustomTypeDef[]
+    variables?: VariableModel[]
+    events?: Record<string, unknown>[]
+    states?: Record<string, unknown>[]
+    regions?: Record<string, unknown>[]
+}
+
+export interface VariableModel {
+    name: string
+    type: string
+    initial?: unknown
+    array?: number
+}
+
 export interface ClockModel {
     hsi_hz: number
     lsi_hz: number
@@ -85,7 +139,7 @@ export interface HardwareModel {
     peripherals: PeripheralModel[]
     app_tasks: AppTaskModel[]
     sleep: SleepModel | null
-    business_flow: Record<string, unknown> | null
+    business_flow: BusinessFlowModel | null
     clock: ClockModel | null
 }
 
@@ -95,7 +149,7 @@ export interface HardwareModel {
 
 function defaultModel(): HardwareModel {
     return {
-        mcu: { part: '', core_clock_mhz: 64, ram_kb: 144, flash_kb: 512, dual_bank: true },
+        mcu: { part: '', core: '', core_clock_mhz: 64, ram_kb: 144, flash_kb: 512, dual_bank: true },
         pins: [],
         peripherals: [],
         app_tasks: [],
@@ -177,6 +231,7 @@ export function yamlToModel(text: string): HardwareModel {
             const m = doc.mcu as Record<string, unknown>
             model.mcu = {
                 part: String(m.part ?? ''),
+                core: String(m.core ?? ''),
                 core_clock_mhz: Number(m.core_clock_mhz ?? 64),
                 ram_kb: Number(m.ram_kb ?? 144),
                 flash_kb: Number(m.flash_kb ?? 512),
@@ -216,7 +271,7 @@ export function yamlToModel(text: string): HardwareModel {
         }))
 
         model.sleep = doc.sleep ? { mode: String((doc.sleep as any).mode ?? 'SLEEP') } : null
-        model.business_flow = (doc.business_flow as Record<string, unknown>) ?? null
+        model.business_flow = (doc.business_flow as BusinessFlowModel) ?? null
 
         // Clock config
         if (doc.clock && typeof doc.clock === 'object') {
@@ -350,7 +405,7 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         flushToYaml()
     }
 
-    function setBusinessFlow(flow: Record<string, unknown> | null) {
+    function setBusinessFlow(flow: BusinessFlowModel | null) {
         model.business_flow = flow
         flushToYaml()
     }

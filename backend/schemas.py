@@ -35,6 +35,7 @@ class ConnectionInfo(BaseModel):
 # ---- MCU ----
 class McuInfo(BaseModel):
     part: str = ""
+    core: str = ""
     core_clock_mhz: int = 64
     ram_kb: int = 144
     flash_kb: int = 512
@@ -116,25 +117,48 @@ class Annotations(BaseModel):
     signal_role_hints: List[SignalRoleHint] = Field(default_factory=list)
 
 
-# ---- App Task ----
-class TaskTriggerInfo(BaseModel):
-    type: str = "timer"  # timer | event | interrupt
-    source: Optional[str] = None
-    period_ms: Optional[int] = None
-
-
-class TaskSignalInfo(BaseModel):
-    name: str
-    target: Optional[str] = None
-
-
+# ---- App Task (simplified — triggers/signals moved to bind.yaml) ----
 class AppTaskInfo(BaseModel):
     name: str
     priority: int = 3
     stack_size: int = 512
-    run_mode: str = "loop"  # once | loop
-    triggers: List[TaskTriggerInfo] = Field(default_factory=list)
-    signals: List[TaskSignalInfo] = Field(default_factory=list)
+
+
+# ---- Project ----
+class ProjectInfo(BaseModel):
+    name: str = "untitled"
+    version: str = "0.1.0"
+
+
+# ---- Bind YAML models ----
+class BindInterruptInfo(BaseModel):
+    pin: str
+    task: str
+    event: str = ""
+
+
+class BindPeripheralAssignInfo(BaseModel):
+    peripheral: str
+    task: str
+    role: str = ""
+
+
+class BindRoutingInfo(BaseModel):
+    from_task: str = Field(alias="from")
+    to: Optional[str] = None
+    signal: str
+    condition: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+
+
+class BindInfo(BaseModel):
+    hardware: str = "hardware.yaml"
+    task: str = "task.yaml"
+    interrupt: List[BindInterruptInfo] = Field(default_factory=list)
+    peripheral_assign: List[BindPeripheralAssignInfo] = Field(default_factory=list)
+    routing: List[BindRoutingInfo] = Field(default_factory=list)
 
 
 # ---- Passive Constraints ----
@@ -153,5 +177,10 @@ class ParseResponse(BaseModel):
     clock: Optional[ClockConfig] = None
     annotations: Annotations = Field(default_factory=Annotations)
     passive_constraints: PassiveConstraints = Field(default_factory=PassiveConstraints)
+    project: Optional[ProjectInfo] = None
+    bind: Optional[BindInfo] = None
     yaml: str = ""
+    hardware_yaml: str = ""
+    task_yaml: str = ""
+    bind_yaml: str = ""
     warning: Optional[str] = None

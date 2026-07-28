@@ -12,7 +12,8 @@ from schemas import (
     ParseResponse, McuInfo, PinInfo, PeripheralInfo,
     ConnectionInfo, AppTaskInfo, Annotations,
     BusHint, PeripheralHint, PowerHint, SignalRoleHint,
-    PassiveConstraints,
+    PassiveConstraints, ProjectInfo, BindInfo,
+    BindInterruptInfo, BindPeripheralAssignInfo, BindRoutingInfo,
 )
 
 router = APIRouter()
@@ -110,33 +111,71 @@ async def parse_netlist(
     result = run_pipeline(
         netlist_text=netlist_text,
         bom_text=bom_text,
-        yaml_text=None,
+        hw_yaml_text=None,
     )
 
-    # Build response from pipeline result
+    # Determine which YAML strings to use
+    hardware_yaml = result.hardware_yaml or result.yaml
+    task_yaml = result.task_yaml or ""
+
+    # Fallback: if pipeline didn't produce task_yaml, split from monolithic
+    if not task_yaml and result.yaml:
+        from generator.mapper import split_legacy
+        hw_str, task_str, bind_str = split_legacy(result.yaml)
+        hardware_yaml = hw_str
+        task_yaml = task_str
+        bind_yaml = bind_str
+    else:
+        bind_yaml = ""
+
+    # Build response from hardware_yaml for MCU/pins/peripherals
     import yaml
-    doc = yaml.safe_load(result.yaml) or {}
+    hw_doc = yaml.safe_load(hardware_yaml) or {}
+    task_doc = yaml.safe_load(task_yaml) if task_yaml else {}
+    bind_doc = yaml.safe_load(bind_yaml) if bind_yaml else {}
 
     # MCU
-    mcu = McuInfo(**doc.get("mcu", {}))
+    mcu = McuInfo(**hw_doc.get("mcu", {}))
 
     # Pins
-    pins = [PinInfo(**p) for p in doc.get("pins", [])]
+    pins = [PinInfo(**p) for p in hw_doc.get("pins", [])]
 
     # Peripherals
-    peripherals = [PeripheralInfo(**p) for p in doc.get("peripherals", [])]
+    peripherals = [PeripheralInfo(**p) for p in hw_doc.get("peripherals", [])]
 
-    # Connections (derived)
-    connections = _extract_connections(result.yaml)
+    # Connections (derived from hardware_yaml)
+    connections = _extract_connections(hardware_yaml)
 
-    # App tasks
-    app_tasks = [AppTaskInfo(**t) for t in doc.get("app_tasks", [])]
+    # App tasks (from task_yaml)
+    app_tasks = [AppTaskInfo(**t) for t in task_doc.get("app_tasks", [])]
 
-    # Clock config (optional)
+    # Clock config (optional, from hardware_yaml)
     from schemas import ClockConfig
     clock = None
-    if "clock" in doc:
-        clock = ClockConfig(**doc["clock"])
+    if "clock" in hw_doc:
+        clock = ClockConfig(**hw_doc["clock"])
+
+    # Project info
+    project = None
+    if "project" in task_doc:
+        project = ProjectInfo(**task_doc["project"])
+
+    # Bind info
+    bind = None
+    if bind_doc:
+        bind_interrupt = [BindInterruptInfo(**b) for b in bind_doc.get("interrupt", [])]
+        bind_pa = [BindPeripheralAssignInfo(**b) for b in bind_doc.get("peripheral_assign", [])]
+        bind_routing = [BindRoutingInfo(**b) for b in bind_doc.get("routing", [])]
+        bind = BindInfo(
+            hardware=bind_doc.get("hardware", "hardware.yaml"),
+            task=bind_doc.get("task", "task.yaml"),
+            interrupt=bind_interrupt,
+            peripheral_assign=bind_pa,
+            routing=bind_routing,
+        )
+    elif not bind_yaml:
+        # Provide empty bind template for frontend
+        bind = BindInfo()
 
     # Annotations
     ann = result.annotations
@@ -181,6 +220,11 @@ async def parse_netlist(
         clock=clock,
         annotations=annotations,
         passive_constraints=passive,
-        yaml=result.yaml,
+        project=project,
+        bind=bind,
+        yaml=result.yaml,                    # backward compat
+        hardware_yaml=hardware_yaml,
+        task_yaml=task_yaml,
+        bind_yaml=bind_yaml,
         warning=warning,
     )

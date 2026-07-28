@@ -18,39 +18,63 @@ _HW2C_ROOT = Path(__file__).resolve().parents[3] / "hw2c"
 
 class GenerateRequest(BaseModel):
     """Request body for /api/generate."""
-    yaml: str = Field(..., description="Full hardware.yaml content")
+    hardware_yaml: str = Field(default="", description="hardware.yaml content")
+    task_yaml: str = Field(default="", description="task.yaml content")
+    bind_yaml: str = Field(default="", description="bind.yaml content (optional)")
     project_name: str = Field(default="firmware", description="Top-level dir name in zip")
+    yaml: str = Field(default="", description="[DEPRECATED] legacy monolithic YAML")
 
 
 @router.post("/generate")
 async def generate_firmware(req: GenerateRequest) -> StreamingResponse:
     """
-    Accept hardware.yaml, run hw2c gen, return a .zip download stream.
+    Accept hardware.yaml + task.yaml + bind.yaml, run hw2c gen, return a .zip download stream.
 
-    Frontend usage:
-        const blob = await res.blob()
-        const url = URL.createObjectURL(blob)
-        // trigger download via <a> click
+    Backward compatible: if only "yaml" field is sent (old frontend), treat as legacy.
     """
     if not _HW2C_ROOT.exists():
         raise HTTPException(500, "hw2c project root not found at " + str(_HW2C_ROOT))
 
+    # Backward compat: old frontend sends "yaml" only
+    hardware_content = req.hardware_yaml or req.yaml
+    task_content = req.task_yaml
+    bind_content = req.bind_yaml
+
+    if not hardware_content:
+        raise HTTPException(400, "hardware_yaml (or legacy yaml) is required")
+
     tmpdir = Path(tempfile.mkdtemp(prefix="hw2c_gen_"))
-    yaml_path = tmpdir / "hardware.yaml"
+    hw_path = tmpdir / "hardware.yaml"
     output_dir = tmpdir / req.project_name
 
     try:
-        # 1. Write YAML
-        yaml_path.write_text(req.yaml, encoding="utf-8")
+        # 1. Write YAML files
+        hw_path.write_text(hardware_content, encoding="utf-8")
 
-        # 2. Run hw2c gen (force: skip compile check, cross-compiler may not be installed)
+        task_path = None
+        if task_content:
+            task_path = tmpdir / "task.yaml"
+            task_path.write_text(task_content, encoding="utf-8")
+
+        bind_path = None
+        if bind_content:
+            bind_path = tmpdir / "bind.yaml"
+            bind_path.write_text(bind_content, encoding="utf-8")
+
+        # 2. Run hw2c gen with three-file support
+        cmd = [
+            sys.executable, "-m", "parser.cli", "gen",
+            "-i", str(hw_path),
+            "-o", str(output_dir),
+            "--force",
+        ]
+        if task_path:
+            cmd.extend(["--task", str(task_path)])
+        if bind_path:
+            cmd.extend(["--bind", str(bind_path)])
+
         result = subprocess.run(
-            [
-                sys.executable, "-m", "parser.cli", "gen",
-                "-i", str(yaml_path),
-                "-o", str(output_dir),
-                "--force",
-            ],
+            cmd,
             cwd=str(_HW2C_ROOT),
             capture_output=True,
             text=True,

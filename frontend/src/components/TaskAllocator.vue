@@ -1,16 +1,13 @@
 <script setup lang="ts">
 /**
- * TaskAllocator.vue — FreeRTOS task configuration with triggers & signals.
+ * TaskAllocator.vue — FreeRTOS task configuration.
  *
- * Features:
- *   - Rename tasks inline
- *   - Run mode: once (single-shot) or loop (continuous)
- *   - Triggers: timer/periodic, event/semaphore, interrupt (EXTI pin)
- *   - Signals: named events/semaphores with optional target task
- *   - Priority & stack size configuration
+ * Simplified: triggers/signals moved to bind.yaml (BindGraph tab).
+ * Pure task definitions only: name, priority, stack size.
  */
 import { ref, computed } from 'vue'
-import type { AppTaskModel, TaskTrigger, TaskSignal, PinModel } from '../composables/useHardwareModel'
+import type { AppTaskModel } from '../composables/useTaskModel'
+import type { PinModel } from '../composables/useHardwareModel'
 
 const props = defineProps<{
     tasks: AppTaskModel[]
@@ -25,26 +22,16 @@ const emit = defineEmits<{
     (e: 'update-task', index: number, field: string, value: unknown): void
 }>()
 
-/* ---- Available EXTI pins for interrupt triggers ---- */
-const extiPins = computed(() => {
-    if (!props.pins) return []
-    return props.pins
-        .filter(p => p.exti || p.function === 'GPIO_Input')
-        .map(p => p.id)
-})
-
 /* ---- New task form ---- */
 const showForm = ref(false)
 const newName = ref('')
 const newPriority = ref(3)
 const newStack = ref(512)
-const newRunMode = ref<'once' | 'loop'>('loop')
 
 function resetForm() {
     newName.value = ''
     newPriority.value = 3
     newStack.value = 512
-    newRunMode.value = 'loop'
 }
 
 function handleAdd() {
@@ -53,9 +40,6 @@ function handleAdd() {
         name: newName.value.trim(),
         priority: newPriority.value,
         stack_size: newStack.value,
-        run_mode: newRunMode.value,
-        triggers: [],
-        signals: [],
     })
     resetForm()
     showForm.value = false
@@ -79,24 +63,6 @@ function priorityColor(p: number): string {
     return colors[p] ?? '#10b981'
 }
 
-function triggerIcon(t: TaskTrigger): string {
-    switch (t.type) {
-        case 'timer': return '\u23F0'       // ⏰
-        case 'event': return '\u26A1'       // ⚡
-        case 'interrupt': return '\u26A0'   // ⚠
-        default: return ''
-    }
-}
-
-function triggerLabel(t: TaskTrigger): string {
-    switch (t.type) {
-        case 'timer': return t.period_ms ? `${t.period_ms}ms` : 'timer'
-        case 'event': return t.source || 'event'
-        case 'interrupt': return t.source || 'interrupt'
-        default: return ''
-    }
-}
-
 /* ---- Inline editing state per task ---- */
 const editingName = ref<number | null>(null)
 const editNameValue = ref('')
@@ -115,55 +81,6 @@ function commitRename(idx: number) {
 
 function cancelRename() {
     editingName.value = null
-}
-
-/* ---- Trigger management ---- */
-const showTriggerForm = ref<number | null>(null)
-const newTriggerType = ref<'timer' | 'event' | 'interrupt'>('timer')
-const newTriggerSource = ref('')
-const newTriggerPeriod = ref(100)
-
-function addTrigger(idx: number) {
-    let trigger: TaskTrigger
-    if (newTriggerType.value === 'timer') {
-        trigger = { type: 'timer', period_ms: newTriggerPeriod.value }
-    } else if (newTriggerType.value === 'interrupt') {
-        trigger = { type: 'interrupt', source: newTriggerSource.value || undefined }
-    } else {
-        trigger = { type: 'event', source: newTriggerSource.value || undefined }
-    }
-    const updated = [...props.tasks[idx].triggers, trigger]
-    emit('update-task', idx, 'triggers', updated)
-    showTriggerForm.value = null
-    newTriggerSource.value = ''
-    newTriggerPeriod.value = 100
-}
-
-function removeTrigger(taskIdx: number, trigIdx: number) {
-    const updated = props.tasks[taskIdx].triggers.filter((_, i) => i !== trigIdx)
-    emit('update-task', taskIdx, 'triggers', updated)
-}
-
-/* ---- Signal management ---- */
-const showSignalForm = ref<number | null>(null)
-const newSignalName = ref('')
-const newSignalTarget = ref('')
-
-function addSignal(idx: number) {
-    if (!newSignalName.value.trim()) return
-    const updated = [...props.tasks[idx].signals, {
-        name: newSignalName.value.trim(),
-        target: newSignalTarget.value || undefined,
-    }]
-    emit('update-task', idx, 'signals', updated)
-    showSignalForm.value = null
-    newSignalName.value = ''
-    newSignalTarget.value = ''
-}
-
-function removeSignal(taskIdx: number, sigIdx: number) {
-    const updated = props.tasks[taskIdx].signals.filter((_, i) => i !== sigIdx)
-    emit('update-task', taskIdx, 'signals', updated)
 }
 </script>
 
@@ -185,16 +102,6 @@ function removeSignal(taskIdx: number, sigIdx: number) {
                 class="input"
                 @keyup.enter="handleAdd"
             />
-
-            <div class="form-row">
-                <label class="form-label">
-                    Run mode:
-                    <select v-model="newRunMode" class="select-inline">
-                        <option value="loop">Loop</option>
-                        <option value="once">Once</option>
-                    </select>
-                </label>
-            </div>
 
             <div class="form-row">
                 <label class="form-label">
@@ -230,7 +137,6 @@ function removeSignal(taskIdx: number, sigIdx: number) {
                 :key="idx"
                 class="task-item"
             >
-                <!-- Task name & mode -->
                 <div class="task-head">
                     <div class="task-name-row">
                         <template v-if="editingName === idx">
@@ -240,14 +146,10 @@ function removeSignal(taskIdx: number, sigIdx: number) {
                                 @keyup.enter="commitRename(idx)"
                                 @keyup.escape="cancelRename"
                                 @blur="commitRename(idx)"
-                                ref="nameInput"
                             />
                         </template>
                         <template v-else>
                             <span class="task-name" @dblclick="startRename(idx, task.name)">{{ task.name }}</span>
-                            <span
-                                :class="['mode-badge', task.run_mode === 'once' ? 'mode-once' : 'mode-loop']"
-                            >{{ task.run_mode === 'once' ? 'once' : 'loop' }}</span>
                         </template>
                     </div>
 
@@ -260,47 +162,10 @@ function removeSignal(taskIdx: number, sigIdx: number) {
                         </span>
                         <span class="tag tag-stack">{{ task.stack_size }} B</span>
                     </div>
-
-                    <!-- Triggers -->
-                    <div class="task-triggers" v-if="task.triggers.length">
-                        <span
-                            v-for="(t, ti) in task.triggers"
-                            :key="ti"
-                            class="trigger-chip"
-                        >
-                            <span class="trigger-icon">{{ triggerIcon(t) }}</span>
-                            {{ triggerLabel(t) }}
-                            <button class="chip-remove" @click="removeTrigger(idx, ti)">&times;</button>
-                        </span>
-                    </div>
-
-                    <!-- Signals -->
-                    <div class="task-signals" v-if="task.signals.length">
-                        <span
-                            v-for="(s, si) in task.signals"
-                            :key="si"
-                            class="signal-chip"
-                        >
-                            &rarr; {{ s.name }}
-                            <small v-if="s.target">to {{ s.target }}</small>
-                            <button class="chip-remove" @click="removeSignal(idx, si)">&times;</button>
-                        </span>
-                    </div>
                 </div>
 
                 <!-- Actions -->
                 <div class="task-actions">
-                    <!-- Run mode toggle -->
-                    <select
-                        class="select-mini"
-                        :value="task.run_mode"
-                        @change="emit('update-task', idx, 'run_mode', ($event.target as HTMLSelectElement).value)"
-                    >
-                        <option value="loop">Loop</option>
-                        <option value="once">Once</option>
-                    </select>
-
-                    <!-- Priority -->
                     <select
                         class="select-mini"
                         :value="task.priority"
@@ -309,52 +174,20 @@ function removeSignal(taskIdx: number, sigIdx: number) {
                         <option v-for="p in 5" :key="p" :value="p">P{{ p }}</option>
                     </select>
 
-                    <!-- Add trigger button -->
-                    <button class="btn-mini btn-trigger" @click="showTriggerForm = showTriggerForm === idx ? null : idx" title="Add trigger">
-                        +Trig
-                    </button>
-
-                    <!-- Add signal button -->
-                    <button class="btn-mini btn-signal" @click="showSignalForm = showSignalForm === idx ? null : idx" title="Add signal">
-                        +Sig
-                    </button>
+                    <select
+                        class="select-mini"
+                        :value="task.stack_size"
+                        @change="emit('update-task', idx, 'stack_size', Number(($event.target as HTMLSelectElement).value))"
+                    >
+                        <option :value="128">128 B</option>
+                        <option :value="256">256 B</option>
+                        <option :value="512">512 B</option>
+                        <option :value="1024">1 KB</option>
+                        <option :value="2048">2 KB</option>
+                        <option :value="4096">4 KB</option>
+                    </select>
 
                     <button class="btn-mini btn-remove" @click="emit('remove-task', idx)">Remove</button>
-                </div>
-
-                <!-- Inline trigger form -->
-                <div v-if="showTriggerForm === idx" class="inline-form">
-                    <select v-model="newTriggerType" class="select-inline">
-                        <option value="timer">Timer</option>
-                        <option value="event">Event</option>
-                        <option value="interrupt">Interrupt</option>
-                    </select>
-
-                    <template v-if="newTriggerType === 'timer'">
-                        <input v-model.number="newTriggerPeriod" type="number" class="input-inline input-num" placeholder="ms" min="1" />
-                        <span class="form-hint">ms</span>
-                    </template>
-                    <template v-else-if="newTriggerType === 'interrupt'">
-                        <select v-model="newTriggerSource" class="select-inline">
-                            <option value="">-- select pin --</option>
-                            <option v-for="pin in extiPins" :key="pin" :value="pin">{{ pin }}</option>
-                        </select>
-                    </template>
-                    <template v-else>
-                        <input v-model="newTriggerSource" type="text" class="input-inline" placeholder="event name" @keyup.enter="addTrigger(idx)" />
-                    </template>
-
-                    <button class="btn-mini btn-confirm-inline" @click="addTrigger(idx)">Add</button>
-                </div>
-
-                <!-- Inline signal form -->
-                <div v-if="showSignalForm === idx" class="inline-form">
-                    <input v-model="newSignalName" type="text" class="input-inline" placeholder="signal name" @keyup.enter="addSignal(idx)" />
-                    <select v-model="newSignalTarget" class="select-inline">
-                        <option value="">-- broadcast --</option>
-                        <option v-for="t in tasks" :key="t.name" :value="t.name" v-if="t.name !== task.name">{{ t.name }}</option>
-                    </select>
-                    <button class="btn-mini btn-confirm-inline" @click="addSignal(idx)">Add</button>
                 </div>
             </div>
         </div>
@@ -375,7 +208,7 @@ function removeSignal(taskIdx: number, sigIdx: number) {
         </div>
 
         <p v-if="!tasks.length && !suggestedNames.length" class="empty">
-            No tasks configured. Tasks are auto-suggested from peripherals.
+            No tasks configured. Tasks are auto-suggested from peripherals. Switch to Bind tab to wire hardware to tasks.
         </p>
     </div>
 </template>
@@ -426,13 +259,6 @@ function removeSignal(taskIdx: number, sigIdx: number) {
     font-size: 0.8rem; padding: 0.35rem;
 }
 
-.select-inline {
-    padding: 1px 4px; border: 1px solid var(--border);
-    border-radius: 3px; background: var(--bg-card);
-    color: var(--text); font-size: 0.7rem; cursor: pointer;
-    margin-left: 0.25rem;
-}
-
 /* Task items */
 .task-list { display: flex; flex-direction: column; gap: 0.4rem; }
 .task-item {
@@ -445,24 +271,12 @@ function removeSignal(taskIdx: number, sigIdx: number) {
 .task-item:hover { border-color: var(--accent); }
 
 /* Task head */
-.task-head {
-    display: flex; flex-direction: column; gap: 0.25rem;
-}
-.task-name-row {
-    display: flex; align-items: center; gap: 0.4rem;
-}
+.task-head { display: flex; flex-direction: column; gap: 0.25rem; }
+.task-name-row { display: flex; align-items: center; gap: 0.4rem; }
 .task-name {
     font-size: 0.8rem; font-weight: 600; cursor: default;
 }
 .task-name:hover { color: var(--accent); }
-
-.mode-badge {
-    font-size: 0.55rem; font-weight: 700;
-    border-radius: 3px; padding: 0 4px;
-    text-transform: uppercase;
-}
-.mode-loop { background: rgba(16,185,129,0.15); color: #34d399; }
-.mode-once { background: rgba(59,130,246,0.15); color: #60a5fa; }
 
 .task-meta { display: flex; gap: 0.35rem; }
 
@@ -474,33 +288,6 @@ function removeSignal(taskIdx: number, sigIdx: number) {
     padding: 0 4px; border-radius: 3px; font-size: 0.6rem;
     background: rgba(107,114,128,0.15); color: #9ca3af;
 }
-
-/* Triggers */
-.task-triggers { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.15rem; }
-.trigger-chip {
-    display: inline-flex; align-items: center; gap: 0.15rem;
-    padding: 0 5px; border-radius: 3px; font-size: 0.6rem;
-    background: rgba(245,158,11,0.1); color: #fbbf24;
-    border: 1px solid rgba(245,158,11,0.2);
-}
-.trigger-icon { font-size: 0.65rem; }
-
-/* Signals */
-.task-signals { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.1rem; }
-.signal-chip {
-    display: inline-flex; align-items: center; gap: 0.15rem;
-    padding: 0 5px; border-radius: 3px; font-size: 0.6rem;
-    background: rgba(139,92,246,0.1); color: #a78bfa;
-    border: 1px solid rgba(139,92,246,0.2);
-}
-.signal-chip small { font-size: 0.55rem; color: #7c6fa8; }
-
-.chip-remove {
-    background: none; border: none; color: inherit;
-    cursor: pointer; font-size: 0.7rem; opacity: 0.5;
-    padding: 0; line-height: 1; margin-left: 1px;
-}
-.chip-remove:hover { opacity: 1; }
 
 /* Actions row */
 .task-actions {
@@ -515,19 +302,12 @@ function removeSignal(taskIdx: number, sigIdx: number) {
     color: var(--text); font-size: 0.6rem; cursor: pointer;
 }
 
-/* Inline form */
-.inline-form {
-    display: flex; align-items: center; gap: 0.3rem;
-    margin-top: 0.35rem; padding: 0.35rem 0;
-}
 .input-inline {
     padding: 1px 4px; border: 1px solid var(--border);
     border-radius: 3px; background: var(--bg-card);
-    color: var(--text); font-size: 0.65rem; width: 100px;
+    color: var(--text); font-size: 0.65rem; width: 120px;
 }
 .input-inline:focus { outline: none; border-color: var(--accent); }
-.input-num { width: 50px; }
-.form-hint { font-size: 0.6rem; color: var(--text-dim); }
 
 .btn-mini {
     padding: 1px 6px; border: 1px solid var(--border);
@@ -539,12 +319,6 @@ function removeSignal(taskIdx: number, sigIdx: number) {
 .btn-mini:hover { border-color: var(--text-dim); color: var(--text); }
 .btn-remove { color: #ef4444; border-color: rgba(239,68,68,0.3); }
 .btn-remove:hover { background: rgba(239,68,68,0.1); color: #f87171; }
-.btn-trigger { color: #f59e0b; border-color: rgba(245,158,11,0.3); }
-.btn-trigger:hover { background: rgba(245,158,11,0.1); color: #fbbf24; }
-.btn-signal { color: #8b5cf6; border-color: rgba(139,92,246,0.3); }
-.btn-signal:hover { background: rgba(139,92,246,0.1); color: #a78bfa; }
-.btn-confirm-inline { color: #10b981; border-color: rgba(16,185,129,0.3); }
-.btn-confirm-inline:hover { background: rgba(16,185,129,0.1); }
 
 /* Suggestions */
 .suggested { padding: 0.5rem 0; }
