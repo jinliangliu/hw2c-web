@@ -1,6 +1,6 @@
 # hw2c-web
 
-**hw2c 的可视化配置前端** - 上传 EDA 设计文件、预览硬件封装、编排任务与绑定、一键生成嵌入式固件。
+**Visual Configuration Frontend for hw2c** -- Upload EDA design files, preview the MCU package, orchestrate tasks and bindings, and generate embedded firmware with one click.
 
 [![Vue](https://img.shields.io/badge/Vue-3.5-blue.svg)](https://vuejs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal.svg)](https://fastapi.tiangolo.com)
@@ -8,23 +8,23 @@
 
 ---
 
-## 功能概览
+## Feature Overview
 
 ```mermaid
 flowchart LR
-    subgraph Input["上传"]
+    subgraph Input["Upload"]
         A1[("Netlist<br>.enet / .xml")]
         A2[("BOM<br>.csv")]
     end
 
-    subgraph Tabs["四栏工作区"]
-        B1["Hardware<br>封装预览 / 外设 / 拓扑"]
-        B2["Tasks<br>RTOS 任务 / 状态机"]
-        B3["Bind<br>硬件↔软件 连线绑定"]
-        B4["YAML<br>三层 DSL 实时编辑"]
+    subgraph Tabs["Four-Tab Workspace"]
+        B1["Hardware<br>Package / Peripherals / Topology"]
+        B2["Tasks<br>RTOS Tasks / State Machine"]
+        B3["Bind<br>HW <-> SW Wiring"]
+        B4["YAML<br>Three-Layer DSL Editor"]
     end
 
-    subgraph Output["输出"]
+    subgraph Output["Output"]
         C1[("hardware.yaml")]
         C2[("task.yaml")]
         C3[("bind.yaml")]
@@ -33,47 +33,47 @@ flowchart LR
     Input --> Tabs --> Output
 ```
 
-> **一句话**：拖拽绑定硬件中断源到 FreeRTOS 任务，可视化配置外设引脚，实时预览 YAML 输出。
+> **One-liner**: Drag-and-drop hardware interrupt sources to FreeRTOS tasks, visually configure peripheral pins, and preview YAML output in real time.
 
 ---
 
-## 四栏工作区
+## Four-Tab Workspace
 
-| 面板 | 内容 | 技术 |
-|------|------|------|
-| **Hardware** | MCU 封装预览 (LQFP64)、引脚使用状态、外设列表、时钟树、拓扑连线图 | Canvas 绘制 |
-| **Tasks** | FreeRTOS 任务定义 (名称/优先级/栈)、TaskGraph 可视化、TaskAllocator 增删改 | Vue Flow |
-| **Bind** | 中断绑定 (EXTI→Task)、外设分配 (Peripheral→Task)、任务路由 (Task→Task) | Vue Flow 拖拽连线 |
-| **YAML** | `hardware.yaml` / `task.yaml` / `bind.yaml` 三栏 CodeMirror 编辑器 | CodeMirror 6 |
-
----
-
-## 技术栈
-
-| 层 | 技术 | 说明 |
-|----|------|------|
-| 前端框架 | Vue 3 (Composition API + TypeScript) | 响应式状态管理 |
-| 流程图 | Vue Flow | 任务节点可视化、拖拽连线绑定 |
-| 代码编辑 | CodeMirror 6 | YAML 语法高亮、暗色主题 |
-| 后端 | FastAPI (Python) | REST API，调用 hw2c parser/generator |
-| 后端逻辑 | hw2c SDK | 网表解析、代码生成 |
+| Tab | Contents | Technology |
+|-----|----------|------------|
+| **Hardware** | MCU package preview (LQFP64), pin usage status, peripheral list, clock tree, topology graph | Canvas rendering |
+| **Tasks** | FreeRTOS task definitions (name/priority/stack), TaskGraph visualization, TaskAllocator CRUD | Vue Flow |
+| **Bind** | Interrupt bindings (EXTI -> Task), peripheral assignment (Peripheral -> Task), task routing (Task -> Task) | Vue Flow drag-to-connect |
+| **YAML** | `hardware.yaml` / `task.yaml` / `bind.yaml` three-pane CodeMirror editors | CodeMirror 6 |
 
 ---
 
-## 快速开始
+## Tech Stack
 
-### 前置条件
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Frontend Framework | Vue 3 (Composition API + TypeScript) | Reactive state management |
+| Flow Graph | Vue Flow | Task node visualization, drag-to-connect bindings |
+| Code Editor | CodeMirror 6 | YAML syntax highlighting, dark theme |
+| Backend | FastAPI (Python) | REST API, invokes hw2c parser/generator |
+| Core Logic | hw2c SDK | Netlist parsing, code generation |
 
-- Python 3.10+ (hw2c 已安装: `pip install -e ../hw2c`)
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+ (hw2c installed: `pip install -e ../hw2c`)
 - Node.js 18+
-- 项目布局:
+- Workspace layout:
   ```
   your-workspace/
-  ├── hw2c/           # 核心 SDK
-  └── hw2c-web/       # 本仓库
+  ├── hw2c/           # Core SDK
+  └── hw2c-web/       # This repo
   ```
 
-### 1. 启动后端
+### 1. Start Backend
 
 ```bash
 cd backend
@@ -81,7 +81,7 @@ pip install fastapi uvicorn
 uvicorn app:app --reload --port 8000
 ```
 
-### 2. 启动前端
+### 2. Start Frontend
 
 ```bash
 cd frontend
@@ -89,36 +89,36 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。
+Open `http://localhost:5173` in your browser.
 
-### 3. 工作流
+### 3. Workflow
 
-1. 上传 BOM + Netlist -> 自动解析硬件能力
-2. 在 Hardware 面板预览封装、调整外设配置
-3. 在 Tasks 面板添加 FreeRTOS 任务
-4. 在 Bind 面板拖拽连线：EXTI -> Task，Peripheral -> Task，Task -> Task
-5. 在 YAML 面板查看/编辑生成的 DSL
-6. 点击 Generate 生成固件 ZIP 下载
+1. Upload BOM + Netlist -> auto-detect hardware capabilities
+2. Preview the MCU package and adjust peripheral config in the Hardware tab
+3. Add FreeRTOS tasks in the Tasks tab
+4. Drag to wire bindings in the Bind tab: EXTI -> Task, Peripheral -> Task, Task -> Task
+5. Review/edit the generated DSL in the YAML tab
+6. Click Generate to download the firmware ZIP
 
 ---
 
-## API 端点
+## API Endpoints
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/parse` | 上传网表 + BOM，返回 `hardware_yaml` / `task_yaml` / `bind_yaml` 及结构化数据 |
-| `POST` | `/api/generate` | 传入三层 YAML，返回固件 ZIP 下载 |
-| `GET` | `/api/health` | 健康检查 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/parse` | Upload netlist + BOM; returns `hardware_yaml` / `task_yaml` / `bind_yaml` and structured data |
+| `POST` | `/api/generate` | Submit three-layer YAML; returns firmware ZIP download |
+| `GET` | `/api/health` | Health check |
 
-### `/api/parse` 请求
+### `/api/parse` Request
 
 ```
 multipart/form-data:
-  netlist:  .enet 或 .xml (str)
-  bom:      .csv          (str, 可选)
+  netlist:  .enet or .xml  (str)
+  bom:      .csv           (str, optional)
 ```
 
-### `/api/parse` 响应
+### `/api/parse` Response
 
 ```json
 {
@@ -136,60 +136,60 @@ multipart/form-data:
 
 ---
 
-## 目录结构
+## Directory Structure
 
 ```
 hw2c-web
 ├── backend/
-│   ├── app.py              # FastAPI 入口
-│   ├── schemas.py          # Pydantic 请求/响应模型
+│   ├── app.py              # FastAPI entry point
+│   ├── schemas.py          # Pydantic request/response models
 │   └── routes/
-│       ├── parse.py        # POST /api/parse - 网表解析
-│       └── generate.py     # POST /api/generate - 固件生成
+│       ├── parse.py        # POST /api/parse -- netlist parsing
+│       └── generate.py     # POST /api/generate -- firmware generation
 └── frontend/
     └── src/
-        ├── App.vue         # 主布局 (四栏 Tab)
-        ├── api.ts          # 后端 API 调用
-        ├── main.ts         # 入口
+        ├── App.vue         # Main layout (four tabs)
+        ├── api.ts          # Backend API client
+        ├── main.ts         # Entry point
         ├── composables/
-        │   ├── useHardwareModel.ts  # hardware.yaml 响应式模型
-        │   ├── useTaskModel.ts      # task.yaml 响应式模型
-        │   ├── useBindModel.ts      # bind.yaml 响应式模型
-        │   ├── ConstraintEngine.ts  # 引脚约束校验
-        │   ├── BusColorMap.ts       # 总线颜色映射
-        │   └── Lqfp64Pinout.ts      # LQFP64 封装坐标数据
+        │   ├── useHardwareModel.ts  # hardware.yaml reactive model
+        │   ├── useTaskModel.ts      # task.yaml reactive model
+        │   ├── useBindModel.ts      # bind.yaml reactive model
+        │   ├── ConstraintEngine.ts  # Pin constraint validation
+        │   ├── BusColorMap.ts       # Bus color mapping
+        │   └── Lqfp64Pinout.ts      # LQFP64 package coordinate data
         └── components/
-            ├── FileUpload.vue       # 文件上传组件
-            ├── PinChip.vue          # MCU 封装预览 (Canvas)
-            ├── PinTable.vue         # 引脚详细列表
-            ├── PeripheralList.vue   # 外设列表
-            ├── PeripheralConfig.vue # 外设配置面板
-            ├── TopologyGraph.vue    # 硬件拓扑图
-            ├── ClockTree.vue        # 时钟树配置
-            ├── TaskAllocator.vue    # 任务管理面板
-            ├── TaskGraph.vue        # 任务结构图
-            ├── BindGraph.vue        # 硬件-软件绑定图
-            ├── YamlEditor.vue       # CodeMirror YAML 编辑器
-            ├── YamlSource.vue       # YAML 数据源面板
+            ├── FileUpload.vue       # File upload widget
+            ├── PinChip.vue          # MCU package preview (Canvas)
+            ├── PinTable.vue         # Pin detail table
+            ├── PeripheralList.vue   # Peripheral list
+            ├── PeripheralConfig.vue # Peripheral config panel
+            ├── TopologyGraph.vue    # Hardware topology graph
+            ├── ClockTree.vue        # Clock tree config
+            ├── TaskAllocator.vue    # Task management panel
+            ├── TaskGraph.vue        # Task structure graph
+            ├── BindGraph.vue        # HW-SW binding graph
+            ├── YamlEditor.vue       # CodeMirror YAML editor
+            ├── YamlSource.vue       # YAML data source panel
             └── configs/
-                ├── GPIOConfig.vue   # GPIO 引脚配置
-                ├── UARTConfig.vue   # UART 外设配置
-                ├── SPIConfig.vue    # SPI 外设配置
-                └── I2CConfig.vue    # I2C 外设配置
+                ├── GPIOConfig.vue   # GPIO pin config
+                ├── UARTConfig.vue   # UART peripheral config
+                ├── SPIConfig.vue    # SPI peripheral config
+                └── I2CConfig.vue    # I2C peripheral config
 ```
 
 ---
 
-## 架构
+## Architecture
 
 ```mermaid
 flowchart TB
     subgraph Browser["Browser (Vue 3)"]
         direction TB
-        FH["FileUpload<br>上传 BOM + Netlist"] --> HW["Hardware 面板<br>封装 / 外设 / 时钟 / 拓扑"]
-        HW --> TASK["Tasks 面板<br>TaskAllocator + TaskGraph"]
-        TASK --> BIND["Bind 面板<br>BindGraph 拖拽连线"]
-        BIND --> YAML["YAML 面板<br>三层编辑器"]
+        FH["FileUpload<br>BOM + Netlist"] --> HW["Hardware Tab<br>Package / Peripherals / Clock / Topology"]
+        HW --> TASK["Tasks Tab<br>TaskAllocator + TaskGraph"]
+        TASK --> BIND["Bind Tab<br>BindGraph Drag-to-Connect"]
+        BIND --> YAML["YAML Tab<br>Three-Layer Editor"]
     end
 
     subgraph API["FastAPI Backend :8000"]
@@ -208,24 +208,24 @@ flowchart TB
 
 ---
 
-## 开发
+## Development
 
 ```bash
-# 后端
+# Backend
 cd backend && uvicorn app:app --reload --port 8000
 
-# 前端 (Vite HMR)
+# Frontend (Vite HMR)
 cd frontend && npm run dev
 
-# 类型检查
+# Type check
 cd frontend && npx tsc --noEmit
 
-# 构建生产版本
+# Production build
 cd frontend && npm run build
 ```
 
 ---
 
-## 许可证
+## License
 
-MIT © hw2c contributors
+MIT (c) hw2c contributors
