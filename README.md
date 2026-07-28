@@ -6,6 +6,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal.svg)](https://fastapi.tiangolo.com)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+[GitHub](https://github.com/jinliangliu/hw2c-web)
+
 ---
 
 ## Feature Overview
@@ -228,4 +230,4 @@ cd frontend && npm run build
 
 ## License
 
-MIT (c) hw2c contributors
+[MIT](LICENSE) (c) 2025-2026 jinliangliu
