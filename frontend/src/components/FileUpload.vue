@@ -20,6 +20,7 @@ type DropState = 'idle' | 'drag' | 'loading' | 'done'
 
 <template>
     <label
+        v-if="!results"
         class="dropzone panel"
         :class="{ 'dropzone-drag': false, 'dropzone-done': results }"
         @dragover.prevent

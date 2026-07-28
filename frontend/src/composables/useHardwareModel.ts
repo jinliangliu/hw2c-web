@@ -16,6 +16,9 @@ import { load, dump } from 'js-yaml'
 export interface McuModel {
     part: string
     core_clock_mhz: number
+    ram_kb: number
+    flash_kb: number
+    dual_bank: boolean
 }
 
 export interface PinModel {
@@ -32,19 +35,48 @@ export interface PeripheralModel {
     name: string
     type: string
     bus?: string | null
+    uart?: string | null
     address?: number | null
     extra?: Record<string, unknown>
     features?: string[]
+}
+
+export interface TaskTrigger {
+    type: 'timer' | 'event' | 'interrupt'
+    /** Event/semaphore name for 'event' type, pin ID for 'interrupt' type, period_ms for 'timer' */
+    source?: string
+    period_ms?: number
+}
+
+export interface TaskSignal {
+    name: string
+    /** Target task name (empty = broadcast) */
+    target?: string
 }
 
 export interface AppTaskModel {
     name: string
     priority: number
     stack_size: number
+    /** 'once' = single-shot, 'loop' = continuous */
+    run_mode: 'once' | 'loop'
+    triggers: TaskTrigger[]
+    signals: TaskSignal[]
 }
 
 export interface SleepModel {
     mode: string
+}
+
+export interface ClockModel {
+    hsi_hz: number
+    lsi_hz: number
+    hse: { present: boolean; frequency_hz: number }
+    lse: { present: boolean; frequency_hz: number }
+    pll: { source: string; m: number; n: number; r: number }
+    sysclk: { source: string; frequency_hz: number }
+    apb: { prescaler: number }
+    freertos_tick: { source: string; frequency_hz: number }
 }
 
 export interface HardwareModel {
@@ -54,6 +86,7 @@ export interface HardwareModel {
     app_tasks: AppTaskModel[]
     sleep: SleepModel | null
     business_flow: Record<string, unknown> | null
+    clock: ClockModel | null
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +95,13 @@ export interface HardwareModel {
 
 function defaultModel(): HardwareModel {
     return {
-        mcu: { part: '', core_clock_mhz: 64 },
+        mcu: { part: '', core_clock_mhz: 64, ram_kb: 144, flash_kb: 512, dual_bank: true },
         pins: [],
         peripherals: [],
         app_tasks: [],
         sleep: null,
         business_flow: null,
+        clock: null,
     }
 }
 
@@ -98,17 +132,35 @@ function modelToYaml(model: HardwareModel): string {
         })
     }
     if (model.app_tasks.length > 0) {
-        doc.app_tasks = model.app_tasks.map(t => ({
-            name: t.name,
-            priority: t.priority,
-            stack_size: t.stack_size,
-        }))
+        doc.app_tasks = model.app_tasks.map(t => {
+            const o: Record<string, unknown> = {
+                name: t.name,
+                priority: t.priority,
+                stack_size: t.stack_size,
+                run_mode: t.run_mode,
+            }
+            if (t.triggers.length) o.triggers = t.triggers
+            if (t.signals.length) o.signals = t.signals
+            return o
+        })
     }
     if (model.sleep?.mode) {
         doc.sleep = { mode: model.sleep.mode }
     }
     if (model.business_flow && Object.keys(model.business_flow).length) {
         doc.business_flow = model.business_flow
+    }
+    if (model.clock) {
+        doc.clock = {
+            hsi_hz: model.clock.hsi_hz,
+            lsi_hz: model.clock.lsi_hz,
+            hse: { present: model.clock.hse.present, frequency_hz: model.clock.hse.frequency_hz },
+            lse: { present: model.clock.lse.present, frequency_hz: model.clock.lse.frequency_hz },
+            pll: { ...model.clock.pll },
+            sysclk: { ...model.clock.sysclk },
+            apb: { prescaler: model.clock.apb.prescaler },
+            freertos_tick: { ...model.clock.freertos_tick },
+        }
     }
 
     return dump(doc, { indent: 2, sortKeys: false })
@@ -126,6 +178,9 @@ export function yamlToModel(text: string): HardwareModel {
             model.mcu = {
                 part: String(m.part ?? ''),
                 core_clock_mhz: Number(m.core_clock_mhz ?? 64),
+                ram_kb: Number(m.ram_kb ?? 144),
+                flash_kb: Number(m.flash_kb ?? 512),
+                dual_bank: Boolean(m.dual_bank ?? true),
             }
         }
 
@@ -144,7 +199,7 @@ export function yamlToModel(text: string): HardwareModel {
         model.peripherals = rawPeris.map((p: any) => ({
             name: String(p.name ?? ''),
             type: String(p.type ?? ''),
-            bus: p.bus ?? null,
+            bus: p.bus ?? p.uart ?? null,
             address: p.address ?? null,
             extra: p.extra ?? undefined,
             features: Array.isArray(p.features) ? p.features : undefined,
@@ -155,10 +210,47 @@ export function yamlToModel(text: string): HardwareModel {
             name: String(t.name ?? ''),
             priority: Number(t.priority ?? 3),
             stack_size: Number(t.stack_size ?? 512),
+            run_mode: String(t.run_mode ?? 'loop') as 'once' | 'loop',
+            triggers: Array.isArray(t.triggers) ? t.triggers : [],
+            signals: Array.isArray(t.signals) ? t.signals : [],
         }))
 
         model.sleep = doc.sleep ? { mode: String((doc.sleep as any).mode ?? 'SLEEP') } : null
         model.business_flow = (doc.business_flow as Record<string, unknown>) ?? null
+
+        // Clock config
+        if (doc.clock && typeof doc.clock === 'object') {
+            const c = doc.clock as Record<string, any>
+            model.clock = {
+                hsi_hz: Number(c.hsi_hz ?? 16_000_000),
+                lsi_hz: Number(c.lsi_hz ?? 32_000),
+                hse: {
+                    present: Boolean((c.hse as any)?.present),
+                    frequency_hz: Number((c.hse as any)?.frequency_hz ?? 8_000_000),
+                },
+                lse: {
+                    present: Boolean((c.lse as any)?.present),
+                    frequency_hz: Number((c.lse as any)?.frequency_hz ?? 32768),
+                },
+                pll: {
+                    source: String((c.pll as any)?.source ?? 'HSI'),
+                    m: Number((c.pll as any)?.m ?? 1),
+                    n: Number((c.pll as any)?.n ?? 8),
+                    r: Number((c.pll as any)?.r ?? 2),
+                },
+                sysclk: {
+                    source: String((c.sysclk as any)?.source ?? 'PLL'),
+                    frequency_hz: Number((c.sysclk as any)?.frequency_hz ?? 64_000_000),
+                },
+                apb: {
+                    prescaler: Number((c.apb as any)?.prescaler ?? 1),
+                },
+                freertos_tick: {
+                    source: String((c.freertos_tick as any)?.source ?? 'SysTick'),
+                    frequency_hz: Number((c.freertos_tick as any)?.frequency_hz ?? 1000),
+                },
+            }
+        }
 
         return model
     } catch {

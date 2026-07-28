@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { ParseResponse } from './api'
 import { uploadNetlist, generateFirmware } from './api'
 import { useHardwareModel } from './composables/useHardwareModel'
+import type { AppTaskModel } from './composables/useHardwareModel'
 
 import FileUpload from './components/FileUpload.vue'
 import TopologyGraph from './components/TopologyGraph.vue'
-import PinTable from './components/PinTable.vue'
+import PinChip from './components/PinChip.vue'
 import PeripheralList from './components/PeripheralList.vue'
 import PeripheralConfig from './components/PeripheralConfig.vue'
+import TaskAllocator from './components/TaskAllocator.vue'
+import TaskGraph from './components/TaskGraph.vue'
+import ClockTree from './components/ClockTree.vue'
 import YamlEditor from './components/YamlEditor.vue'
 
 // ---- Reactive state ----
@@ -20,26 +24,69 @@ const selectedPeriIdx = ref(-1)
 const generating = ref(false)
 const genError = ref('')
 
-const { model, writePin, addPin, removePin, writePeripheral, addPeripheral, removePeripheral, writeTask, addTask, removeTask, loadFromApi } = useHardwareModel(yamlRef)
+/** Active tab in the main content area */
+const activeTab = ref<'chip' | 'tasks' | 'yaml'>('chip')
 
-// Derived view models (read from reactive model for live-updating UI)
+const {
+    model,
+    writePin, addPin, removePin,
+    writePeripheral, addPeripheral, removePeripheral,
+    writeTask, addTask, removeTask,
+    loadFromApi,
+} = useHardwareModel(yamlRef)
+
+// Derived view models
 const viewPins = computed(() => model.pins)
 const viewPeripherals = computed(() => model.peripherals)
+const viewTasks = computed(() => model.app_tasks)
 
-// Selected peripheral (null if none selected)
 const selectedPeripheral = computed(() => {
     if (selectedPeriIdx.value < 0 || selectedPeriIdx.value >= model.peripherals.length) return null
     return model.peripherals[selectedPeriIdx.value]
 })
+
+/** Peripheral names for task auto-suggestion */
+const peripheralNames = computed(() =>
+    viewPeripherals.value.map(p => p.name).filter(Boolean)
+)
+
+/** Whether RTC peripheral is present */
+const hasRtc = computed(() =>
+    viewPeripherals.value.some(p => p.type === 'Internal_RTC')
+)
+
+// ---- Keyboard shortcuts ----
+function onKeydown(e: KeyboardEvent) {
+    const mod = e.ctrlKey || e.metaKey
+    if (!mod) return
+
+    // Ctrl+S / Cmd+S → download YAML
+    if (e.key === 's' && yamlRef.value) {
+        e.preventDefault()
+        downloadYaml()
+    }
+
+    // Ctrl+G / Cmd+G → generate firmware
+    if (e.key === 'g' && yamlRef.value && !generating.value) {
+        e.preventDefault()
+        handleGenerate()
+    }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 // ---- Handlers ----
 async function handleParse(netlistFile: File, bomFile?: File) {
     loading.value = true
     error.value = ''
     selectedPeriIdx.value = -1
+    genError.value = ''
     try {
         const data = await uploadNetlist(netlistFile, bomFile)
         results.value = data
+        // Pass clock config separately since it's a top-level model field
+        results.value.clock = data.clock ?? undefined
         loadFromApi(data.yaml)
     } catch (e: any) {
         error.value = e.message || 'Unknown error'
@@ -65,10 +112,6 @@ function handlePeripheralUpdate(field: string, value: unknown) {
     writePeripheral(selectedPeriIdx.value, field as any, value)
 }
 
-function handlePinUpdate(pinIndex: number, field: string, value: unknown) {
-    writePin(pinIndex, field as any, value)
-}
-
 async function handleGenerate() {
     if (!yamlRef.value) return
     generating.value = true
@@ -89,6 +132,32 @@ async function handleGenerate() {
         generating.value = false
     }
 }
+
+function downloadYaml() {
+    if (!yamlRef.value) return
+    const blob = new Blob([yamlRef.value], { type: 'application/x-yaml' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'hardware.yaml'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+}
+
+// ---- Task handlers ----
+function handleAddTask(task: AppTaskModel) {
+    addTask(task)
+}
+
+function handleUpdateTask(index: number, field: string, value: unknown) {
+    writeTask(index, field as any, value)
+}
+
+function handleRemoveTask(index: number) {
+    removeTask(index)
+}
 </script>
 
 <template>
@@ -98,11 +167,13 @@ async function handleGenerate() {
             <h1>hw2c web</h1>
             <span class="badge">BETA</span>
             <span class="header-sub">Hardware-to-Code Visual Parser</span>
+            <span class="header-spacer"></span>
+            <span class="shortcuts-hint">Ctrl+S YAML &middot; Ctrl+G Generate</span>
         </header>
 
         <!-- Main: three-column layout -->
         <main class="main">
-            <!-- LEFT: upload + peripherals + resource tree -->
+            <!-- LEFT: upload + peripherals + bus hints + task allocator -->
             <aside class="col-left">
                 <FileUpload
                     :results="results"
@@ -117,27 +188,46 @@ async function handleGenerate() {
                     <div class="panel-title">MCU</div>
                     <div class="mcu-chip">
                         <code>{{ model.mcu.part }}</code>
-                        <span class="tag tag-spi">{{ model.mcu.core_clock_mhz }} MHz</span>
+                        <span class="tag tag-mcu">{{ model.mcu.core_clock_mhz }} MHz</span>
+                    </div>
+                    <div class="mcu-resources">
+                        <div class="mcu-res">
+                            <span class="mcu-res-icon">&#9641;</span>
+                            <span>Flash: <strong>{{ model.mcu.flash_kb }}</strong> KB</span>
+                            <span v-if="model.mcu.dual_bank" class="tag tag-bank">Dual Bank</span>
+                        </div>
+                        <div class="mcu-res">
+                            <span class="mcu-res-icon">&#9731;</span>
+                            <span>RAM: <strong>{{ model.mcu.ram_kb }}</strong> KB</span>
+                        </div>
                     </div>
                 </div>
+
+                <!-- Topology graph -->
+                <TopologyGraph
+                    v-if="results?.connections.length"
+                    :connections="results.connections"
+                    :peripherals="viewPeripherals"
+                />
 
                 <!-- Peripheral list -->
                 <PeripheralList
                     v-if="viewPeripherals.length"
                     :peripherals="viewPeripherals"
+                    :pins="viewPins"
                     :selected-index="selectedPeriIdx"
                     @select="handleSelectPeripheral"
                     @remove="handleRemovePeripheral"
                 />
 
-                <!-- Peripheral config (shown when a peripheral is selected) -->
+                <!-- Peripheral config -->
                 <PeripheralConfig
                     v-if="selectedPeripheral"
                     :peripheral="selectedPeripheral"
                     :pins="viewPins"
                     :index="selectedPeriIdx"
                     @update-peripheral="handlePeripheralUpdate"
-                    @update-pin="handlePinUpdate"
+                    @update-pin="(idx, field, val) => writePin(idx, field, val)"
                 />
 
                 <!-- Bus hints -->
@@ -158,40 +248,94 @@ async function handleGenerate() {
                 </div>
             </aside>
 
-            <!-- CENTER: topology + pin table -->
-            <section class="col-center" v-if="results">
-                <TopologyGraph
-                    :connections="results.connections"
-                    :peripherals="viewPeripherals"
-                />
-
-                <PinTable
-                    :pins="viewPins"
-                    @edit-pin="(idx, field, val) => writePin(idx, field, val)"
-                />
-            </section>
-
-            <!-- RIGHT: YAML editor -->
-            <aside class="col-right" v-if="results">
-                <div class="gen-bar">
+            <!-- CENTER + RIGHT: tabbed content area -->
+            <section class="col-tabs" v-if="results">
+                <!-- Tab bar -->
+                <nav class="tab-bar">
                     <button
-                        class="btn btn-primary btn-gen"
-                        :disabled="generating || !yamlRef"
-                        @click="handleGenerate"
+                        :class="['tab-btn', { active: activeTab === 'chip' }]"
+                        @click="activeTab = 'chip'"
+                    >Chip</button>
+                    <button
+                        :class="['tab-btn', { active: activeTab === 'tasks' }]"
+                        @click="activeTab = 'tasks'"
                     >
-                        {{ generating ? 'Generating...' : 'Generate Firmware' }}
+                        Tasks
+                        <span class="tab-count" v-if="viewTasks.length">{{ viewTasks.length }}</span>
                     </button>
+                    <button
+                        :class="['tab-btn', { active: activeTab === 'yaml' }]"
+                        @click="activeTab = 'yaml'"
+                    >YAML</button>
+                </nav>
+
+                <!-- Tab: Chip -->
+                <div v-show="activeTab === 'chip'" class="tab-content">
+                    <PinChip
+                        :pins="viewPins"
+                        @select-pin="(id) => {}"
+                    />
+                    <div v-if="model.clock" class="panel">
+                        <ClockTree :clock="model.clock" />
+                    </div>
                 </div>
-                <div v-if="genError" class="gen-error">{{ genError }}</div>
-                <YamlEditor v-model="yamlRef" />
-            </aside>
+
+                <!-- Tab: Tasks -->
+                <div v-show="activeTab === 'tasks'" class="tab-content">
+                    <TaskAllocator
+                        :tasks="viewTasks"
+                        :pins="viewPins"
+                        :peripheral-names="peripheralNames"
+                        @add-task="handleAddTask"
+                        @remove-task="handleRemoveTask"
+                        @update-task="handleUpdateTask"
+                    />
+                    <TaskGraph
+                        v-if="viewTasks.length"
+                        :tasks="viewTasks"
+                        :pins="viewPins"
+                        :has-rtc="hasRtc"
+                        @update-task="handleUpdateTask"
+                    />
+                </div>
+
+                <!-- Tab: YAML -->
+                <div v-show="activeTab === 'yaml'" class="tab-content tab-yaml">
+                    <div class="gen-bar">
+                        <button
+                            class="btn btn-primary btn-gen"
+                            :disabled="generating || !yamlRef"
+                            @click="handleGenerate"
+                        >
+                            <span v-if="generating" class="spinner"></span>
+                            {{ generating ? 'Generating...' : 'Generate Firmware' }}
+                        </button>
+                        <button
+                            class="btn btn-icon"
+                            :disabled="!yamlRef"
+                            @click="downloadYaml"
+                            title="Download YAML (Ctrl+S)"
+                        >YAML</button>
+                    </div>
+                    <div v-if="genError" class="gen-error">{{ genError }}</div>
+                    <YamlEditor v-model="yamlRef" />
+                </div>
+            </section>
 
             <!-- Empty state -->
             <div class="empty-state" v-if="!results && !loading">
                 <div class="empty-state-inner">
                     <h2>Welcome to hw2c web</h2>
                     <p>Drop your EasyEDA Pro netlist (<code>.enet</code>) and BOM (<code>.csv</code>)</p>
-                    <p class="dim">Parse → Edit YAML → Generate firmware</p>
+                    <p class="dim">Parse &rarr; Edit YAML &rarr; Generate firmware</p>
+                </div>
+            </div>
+
+            <!-- Loading overlay -->
+            <div v-if="loading" class="loading-overlay">
+                <div class="loading-card">
+                    <span class="spinner spinner-lg"></span>
+                    <p>Parsing netlist...</p>
                 </div>
             </div>
         </main>
@@ -201,11 +345,19 @@ async function handleGenerate() {
 <style scoped>
 .app-shell { display: flex; flex-direction: column; min-height: 100vh; }
 .header-sub { font-size: 0.8rem; color: var(--text-dim); }
+.header-spacer { flex: 1; }
+.shortcuts-hint {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    padding: 2px 8px;
+    background: var(--bg-input);
+    border-radius: 4px;
+}
 
 .main {
     flex: 1;
     display: grid;
-    grid-template-columns: 280px 1fr 420px;
+    grid-template-columns: 280px 1fr;
     gap: 1rem;
     padding: 1rem;
 }
@@ -215,12 +367,81 @@ async function handleGenerate() {
     place-items: center;
 }
 
-.col-left   { display: flex; flex-direction: column; gap: 1rem; }
-.col-center { display: flex; flex-direction: column; gap: 1rem; overflow: hidden; }
-.col-right  { display: flex; flex-direction: column; gap: 0.5rem; }
+.main:has(.loading-overlay) {
+    position: relative;
+}
 
-.gen-bar { display: flex; }
+.col-left   { display: flex; flex-direction: column; gap: 1rem; }
+.col-tabs  { display: flex; flex-direction: column; gap: 0; overflow: hidden; min-width: 0; }
+
+/* ---- Tab bar ---- */
+.tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+}
+.tab-btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.tab-count {
+    font-size: 0.6rem;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 99px;
+    padding: 0 5px;
+    line-height: 1.4;
+}
+
+/* ---- Tab content ---- */
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0 0 0;
+}
+.tab-yaml {
+    padding-top: 0.5rem;
+}
+
+.gen-bar { display: flex; gap: 0.4rem; }
 .btn-gen { flex: 1; text-align: center; justify-content: center; font-weight: 600; }
+.btn-icon {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 600;
+    transition: all 0.15s;
+}
+.btn-icon:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent);
+    color: #fff;
+}
+.btn-icon:disabled { opacity: 0.4; cursor: default; }
+
 .gen-error {
     color: var(--red); font-size: 0.75rem; padding: 0.5rem;
     background: rgba(239,68,68,0.1); border: 1px solid var(--red); border-radius: var(--radius);
@@ -229,13 +450,65 @@ async function handleGenerate() {
 .error-box { color: var(--red); font-size: 0.8rem; border-color: var(--red); }
 
 .mcu-card { text-align: center; }
-.mcu-chip { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
-.mcu-chip code { font-size: 1rem; font-weight: 700; }
+.mcu-chip { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-bottom: 0.6rem; }
+.mcu-chip code { font-size: 0.95rem; font-weight: 700; }
+.mcu-resources { display: flex; flex-direction: column; gap: 0.3rem; }
+.mcu-res { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-dim); }
+.mcu-res-icon { font-size: 0.65rem; color: var(--blue); }
+.mcu-res strong { color: var(--text); }
+
+.tag-mcu {
+    background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1px 6px; font-size: 0.65rem; font-weight: 600;
+}
+.tag-bank {
+    background: rgba(59,130,246,0.15); color: var(--blue); border-radius: var(--radius);
+    padding: 0 4px; font-size: 0.55rem; font-weight: 600;
+}
 
 .hint-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .chip {
     display: inline-flex; align-items: center; gap: 0.3rem;
     padding: 3px 8px; background: var(--bg-input); border-radius: 99px; font-size: 0.75rem;
+}
+
+/* Spinner */
+.spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+}
+.spinner-lg { width: 24px; height: 24px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Loading overlay */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15,20,25,0.8);
+    z-index: 10;
+}
+.loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 2rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.loading-card p {
+    font-size: 0.9rem;
+    color: var(--text-dim);
 }
 
 .empty-state { display: flex; align-items: center; justify-content: center; min-height: 60vh; }

@@ -7,19 +7,14 @@
  */
 import { computed } from 'vue'
 import type { ConnectionInfo, PeripheralInfo } from '../api'
+import { BUS_COLOR, extractBusType } from '../composables/BusColorMap'
 
 const props = defineProps<{
     connections: ConnectionInfo[]
     peripherals: PeripheralInfo[]
 }>()
 
-const BUS_COLORS: Record<string, string> = {
-    I2C:  '#3b82f6',
-    SPI:  '#10b981',
-    UART: '#f59e0b',
-    USART: '#f59e0b',
-    GPIO: '#8b5cf6',
-}
+const BUS_COLORS = BUS_COLOR
 
 interface Node {
     id: string
@@ -32,9 +27,7 @@ interface Node {
 }
 
 function busType(peri: PeripheralInfo): string {
-    if (peri.bus) return peri.bus.replace(/\d/g, '')
-    if (peri.uart) return 'UART'
-    return 'GPIO'
+    return extractBusType(peri.bus ?? peri.uart)
 }
 
 const nodes = computed<Node[]>(() => {

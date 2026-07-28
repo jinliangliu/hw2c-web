@@ -2,7 +2,8 @@
 
 export interface ParseResponse {
     status: string
-    mcu:         { part: string; core_clock_mhz: number }
+    mcu:         { part: string; core_clock_mhz: number; ram_kb: number; flash_kb: number; dual_bank: boolean }
+    clock?:      ClockConfig
     pins:        PinInfo[]
     peripherals: PeripheralInfo[]
     connections: ConnectionInfo[]
@@ -73,6 +74,43 @@ export interface PowerHint {
 export interface SignalRoleHint {
     net:  string
     role: string
+}
+
+/** --- Clock configuration --- */
+export interface HseConfig {
+    present: boolean
+    frequency_hz: number
+}
+export interface LseConfig {
+    present: boolean
+    frequency_hz: number
+}
+export interface PllConfig {
+    source: string
+    m: number
+    n: number
+    r: number
+}
+export interface SysclkConfig {
+    source: string
+    frequency_hz: number
+}
+export interface ApbConfig {
+    prescaler: number
+}
+export interface FreeRtosTickConfig {
+    source: string
+    frequency_hz: number
+}
+export interface ClockConfig {
+    hsi_hz: number
+    lsi_hz: number
+    hse: HseConfig
+    lse: LseConfig
+    pll: PllConfig
+    sysclk: SysclkConfig
+    apb: ApbConfig
+    freertos_tick: FreeRtosTickConfig
 }
 
 const BASE = '/api'

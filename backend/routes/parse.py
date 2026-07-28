@@ -60,7 +60,7 @@ def _extract_connections(parsed_yaml: str) -> list[ConnectionInfo]:
 
     # Match peripherals to bus pins
     for peri in peripherals:
-        bus = peri.get("bus", "")
+        bus = peri.get("bus", "") or peri.get("uart", "")
         if bus and bus in bus_pins:
             for pin in bus_pins[bus]:
                 connections.append(ConnectionInfo(
@@ -132,6 +132,12 @@ async def parse_netlist(
     # App tasks
     app_tasks = [AppTaskInfo(**t) for t in doc.get("app_tasks", [])]
 
+    # Clock config (optional)
+    from schemas import ClockConfig
+    clock = None
+    if "clock" in doc:
+        clock = ClockConfig(**doc["clock"])
+
     # Annotations
     ann = result.annotations
     annotations = Annotations(
@@ -172,6 +178,7 @@ async def parse_netlist(
         peripherals=peripherals,
         connections=connections,
         app_tasks=app_tasks,
+        clock=clock,
         annotations=annotations,
         passive_constraints=passive,
         yaml=result.yaml,
