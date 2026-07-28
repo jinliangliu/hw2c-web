@@ -70,7 +70,7 @@ export interface SleepModel {
 }
 
 // ---------------------------------------------------------------------------
-// Complex type definitions (business_flow.types)
+// Complex type definitions (behavior.types)
 // ---------------------------------------------------------------------------
 
 export interface StructField {
@@ -106,7 +106,7 @@ export interface CustomTypeDef {
     bitfield?: BitfieldField[]
 }
 
-export interface BusinessFlowModel {
+export interface BehaviorModel {
     initial_state?: string
     types?: CustomTypeDef[]
     variables?: VariableModel[]
@@ -139,7 +139,7 @@ export interface HardwareModel {
     peripherals: PeripheralModel[]
     app_tasks: AppTaskModel[]
     sleep: SleepModel | null
-    business_flow: BusinessFlowModel | null
+    behavior: BehaviorModel | null
     clock: ClockModel | null
 }
 
@@ -154,7 +154,7 @@ function defaultModel(): HardwareModel {
         peripherals: [],
         app_tasks: [],
         sleep: null,
-        business_flow: null,
+        behavior: null,
         clock: null,
     }
 }
@@ -201,8 +201,8 @@ function modelToYaml(model: HardwareModel): string {
     if (model.sleep?.mode) {
         doc.sleep = { mode: model.sleep.mode }
     }
-    if (model.business_flow && Object.keys(model.business_flow).length) {
-        doc.business_flow = model.business_flow
+    if (model.behavior && Object.keys(model.behavior).length) {
+        doc.behavior = model.behavior
     }
     if (model.clock) {
         doc.clock = {
@@ -271,7 +271,7 @@ export function yamlToModel(text: string): HardwareModel {
         }))
 
         model.sleep = doc.sleep ? { mode: String((doc.sleep as any).mode ?? 'SLEEP') } : null
-        model.business_flow = (doc.business_flow as BusinessFlowModel) ?? null
+        model.behavior = (doc.behavior as BehaviorModel) ?? null
 
         // Clock config
         if (doc.clock && typeof doc.clock === 'object') {
@@ -405,8 +405,8 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         flushToYaml()
     }
 
-    function setBusinessFlow(flow: BusinessFlowModel | null) {
-        model.business_flow = flow
+    function setBehavior(flow: BehaviorModel | null) {
+        model.behavior = flow
         flushToYaml()
     }
 
@@ -434,7 +434,7 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         addTask,
         removeTask,
         writeSleep,
-        setBusinessFlow,
+        setBehavior,
         loadFromApi,
     }
 }

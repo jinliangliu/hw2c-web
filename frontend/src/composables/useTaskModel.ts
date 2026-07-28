@@ -1,7 +1,7 @@
 /**
  * useTaskModel — bidirectional task.yaml ↔ reactive state sync.
  *
- * Handles project metadata, FreeRTOS task definitions, and business_flow
+ * Handles project metadata, FreeRTOS task definitions, and behavior
  * (state machine DSL). Synchronises with a dedicated YAML string ref.
  */
 import { reactive, readonly, watch, type Ref } from 'vue'
@@ -60,7 +60,7 @@ export interface CustomTypeDef {
     bitfield?: BitfieldField[]
 }
 
-export interface BusinessFlowModel {
+export interface BehaviorModel {
     initial_state?: string
     types?: CustomTypeDef[]
     variables?: VariableModel[]
@@ -72,7 +72,7 @@ export interface BusinessFlowModel {
 export interface TaskModel {
     project: ProjectModel
     app_tasks: AppTaskModel[]
-    business_flow: BusinessFlowModel | null
+    behavior: BehaviorModel | null
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ function defaultModel(): TaskModel {
     return {
         project: { name: 'untitled', version: '0.1.0' },
         app_tasks: [],
-        business_flow: null,
+        behavior: null,
     }
 }
 
@@ -104,8 +104,8 @@ function modelToYaml(model: TaskModel): string {
         }))
     }
 
-    if (model.business_flow && Object.keys(model.business_flow).length > 0) {
-        doc.business_flow = model.business_flow
+    if (model.behavior && Object.keys(model.behavior).length > 0) {
+        doc.behavior = model.behavior
     }
 
     return dump(doc, { indent: 2, sortKeys: false })
@@ -133,7 +133,7 @@ export function yamlToModel(text: string): TaskModel {
             stack_size: Number(t.stack_size ?? 512),
         }))
 
-        model.business_flow = (doc.business_flow as BusinessFlowModel) ?? null
+        model.behavior = (doc.behavior as BehaviorModel) ?? null
 
         return model
     } catch {
@@ -187,8 +187,8 @@ export function useTaskModel(yamlRef: Ref<string>) {
         flushToYaml()
     }
 
-    function setBusinessFlow(flow: BusinessFlowModel | null) {
-        model.business_flow = flow
+    function setBehavior(flow: BehaviorModel | null) {
+        model.behavior = flow
         flushToYaml()
     }
 
@@ -206,7 +206,7 @@ export function useTaskModel(yamlRef: Ref<string>) {
         writeTask,
         addTask,
         removeTask,
-        setBusinessFlow,
+        setBehavior,
         loadFromApi,
     }
 }
