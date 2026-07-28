@@ -22,6 +22,13 @@ export interface McuModel {
     dual_bank: boolean
 }
 
+export interface FlashPartition {
+    name: string
+    bank: number
+    offset_kb: number
+    size_kb: number
+}
+
 export interface PinModel {
     id: string
     function: string
@@ -65,8 +72,20 @@ export interface AppTaskModel {
     signals: TaskSignal[]
 }
 
+export interface WakeupSourceModel {
+    type: 'gpio' | 'rtc_alarm' | 'rtc_wakeup' | 'lpuart' | 'iwdg'
+    pin?: string
+    edge?: 'rising' | 'falling' | 'both'
+    period_s?: number
+}
+
 export interface SleepModel {
+    enabled: boolean
     mode: string
+    enter_on_exit: boolean
+    regulator_voltage_scale: number
+    flash_power_down: boolean
+    wakeup_sources: WakeupSourceModel[]
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +160,7 @@ export interface HardwareModel {
     sleep: SleepModel | null
     behavior: BehaviorModel | null
     clock: ClockModel | null
+    flash_partitions: FlashPartition[]
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +176,7 @@ function defaultModel(): HardwareModel {
         sleep: null,
         behavior: null,
         clock: null,
+        flash_partitions: [],
     }
 }
 
@@ -198,8 +219,15 @@ function modelToYaml(model: HardwareModel): string {
             return o
         })
     }
-    if (model.sleep?.mode) {
-        doc.sleep = { mode: model.sleep.mode }
+    if (model.sleep?.enabled || model.sleep?.mode) {
+        doc.sleep = {
+            enabled: model.sleep.enabled,
+            mode: model.sleep.mode || 'SLEEP',
+            enter_on_exit: model.sleep.enter_on_exit,
+            regulator_voltage_scale: model.sleep.regulator_voltage_scale ?? 2,
+            flash_power_down: model.sleep.flash_power_down,
+            wakeup_sources: model.sleep.wakeup_sources ?? [],
+        }
     }
     if (model.behavior && Object.keys(model.behavior).length) {
         doc.behavior = model.behavior
@@ -215,6 +243,14 @@ function modelToYaml(model: HardwareModel): string {
             apb: { prescaler: model.clock.apb.prescaler },
             freertos_tick: { ...model.clock.freertos_tick },
         }
+    }
+    if (model.flash_partitions.length) {
+        doc.flash_partitions = model.flash_partitions.map(p => ({
+            name: p.name,
+            bank: p.bank,
+            offset_kb: p.offset_kb,
+            size_kb: p.size_kb,
+        }))
     }
 
     return dump(doc, { indent: 2, sortKeys: false })
@@ -270,7 +306,15 @@ export function yamlToModel(text: string): HardwareModel {
             signals: Array.isArray(t.signals) ? t.signals : [],
         }))
 
-        model.sleep = doc.sleep ? { mode: String((doc.sleep as any).mode ?? 'SLEEP') } : null
+        model.sleep = doc.sleep ? {
+            enabled: Boolean((doc.sleep as any).enabled ?? false),
+            mode: String((doc.sleep as any).mode ?? 'SLEEP'),
+            enter_on_exit: Boolean((doc.sleep as any).enter_on_exit ?? false),
+            regulator_voltage_scale: Number((doc.sleep as any).regulator_voltage_scale ?? 2),
+            flash_power_down: Boolean((doc.sleep as any).flash_power_down ?? false),
+            wakeup_sources: Array.isArray((doc.sleep as any).wakeup_sources)
+                ? (doc.sleep as any).wakeup_sources : [],
+        } : null
         model.behavior = (doc.behavior as BehaviorModel) ?? null
 
         // Clock config
@@ -305,6 +349,16 @@ export function yamlToModel(text: string): HardwareModel {
                     frequency_hz: Number((c.freertos_tick as any)?.frequency_hz ?? 1000),
                 },
             }
+        }
+
+        // Flash partitions
+        if (Array.isArray(doc.flash_partitions)) {
+            model.flash_partitions = doc.flash_partitions.map((p: any) => ({
+                name: String(p.name ?? ''),
+                bank: Number(p.bank ?? 1),
+                offset_kb: Number(p.offset_kb ?? 0),
+                size_kb: Number(p.size_kb ?? 0),
+            }))
         }
 
         return model
@@ -400,8 +454,19 @@ export function useHardwareModel(yamlRef: Ref<string>) {
     }
 
     function writeSleep(partial: Partial<SleepModel>) {
-        if (!model.sleep) model.sleep = { mode: 'SLEEP' }
+        if (!model.sleep) model.sleep = { enabled: false, mode: 'SLEEP', enter_on_exit: false, regulator_voltage_scale: 2, flash_power_down: false, wakeup_sources: [] }
         Object.assign(model.sleep, partial)
+        flushToYaml()
+    }
+
+    function writeClock(partial: Partial<ClockModel>) {
+        if (!model.clock) return
+        Object.assign(model.clock, partial)
+        flushToYaml()
+    }
+
+    function writeFlashPartitions(partitions: FlashPartition[]) {
+        model.flash_partitions = partitions
         flushToYaml()
     }
 
@@ -434,6 +499,8 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         addTask,
         removeTask,
         writeSleep,
+        writeClock,
+        writeFlashPartitions,
         setBehavior,
         loadFromApi,
     }

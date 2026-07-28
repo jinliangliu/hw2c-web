@@ -2,7 +2,7 @@
 /**
  * GPIOConfig.vue — GPIO peripheral (LED, Button) configuration form.
  *
- * Editable: direction, pull, active_level, EXTI enable.
+ * Editable: direction, pull, active_level, EXTI enable, pin selector.
  */
 import { computed } from 'vue'
 import type { PinModel, PeripheralModel } from '../../composables/useHardwareModel'
@@ -83,11 +83,41 @@ const extiEnabled = computed({
         }
     },
 })
+
+/** Available GPIO pins (free or already assigned to this peripheral) */
+const availableGpioPins = computed(() =>
+    props.pins.filter(p =>
+        p.function.includes('GPIO') || p.function === '' || p.id === linkedPin.value?.id
+    )
+)
+
+function assignPin(pinId: string) {
+    // Un-assign current if any
+    if (pinIdx.value >= 0 && linkedPin.value) {
+        emit('update-pin', pinIdx.value, 'function', '')
+    }
+    // Assign new
+    const idx = props.pins.findIndex(p => p.id === pinId)
+    if (idx >= 0) {
+        const fn = isButton() ? 'GPIO_Input' : 'GPIO_Output'
+        emit('update-pin', idx, 'function', fn)
+    }
+}
 </script>
 
 <template>
     <div class="config-section">
         <h4>{{ isLED() ? 'Output' : isButton() ? 'Input' : 'GPIO' }} Configuration</h4>
+
+        <label>
+            <span>Pin</span>
+            <select class="field" :value="linkedPin?.id ?? ''" @change="assignPin(($event.target as HTMLSelectElement).value)">
+                <option value="">-- Select Pin --</option>
+                <option v-for="pin in availableGpioPins" :key="pin.id" :value="pin.id">
+                    {{ pin.id }} {{ pin.label ? '(' + pin.label + ')' : '' }}
+                </option>
+            </select>
+        </label>
 
         <label v-if="!isLED() && !isButton()">
             <span>Direction</span>
@@ -131,26 +161,12 @@ const extiEnabled = computed({
 
 <style scoped>
 .config-section { display: flex; flex-direction: column; gap: 0.75rem; }
-.config-section h4 {
-    font-size: 0.85rem; font-weight: 600; color: var(--purple); margin-bottom: 0.25rem;
-}
-label {
-    display: flex; flex-direction: column; gap: 0.25rem;
-    font-size: 0.75rem; color: var(--text-dim);
-}
-.field {
-    padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px;
-    background: var(--bg-input); color: var(--text); font-size: 0.8rem;
-}
+.config-section h4 { font-size: 0.85rem; font-weight: 600; color: var(--purple); margin-bottom: 0.25rem; }
+label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: var(--text-dim); }
+.field { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-input); color: var(--text); font-size: 0.8rem; }
 .field:focus { outline: none; border-color: var(--purple); }
-.toggle-row {
-    display: flex; align-items: center; gap: 0.5rem; padding-top: 4px;
-}
+.toggle-row { display: flex; align-items: center; gap: 0.5rem; padding-top: 4px; }
 .toggle-row input[type="checkbox"] { accent-color: var(--accent); }
-.info-row {
-    display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem;
-}
-code {
-    background: var(--bg-input); padding: 1px 6px; border-radius: 3px; font-size: 0.75rem;
-}
+.info-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; }
+code { background: var(--bg-input); padding: 1px 6px; border-radius: 3px; font-size: 0.75rem; }
 </style>

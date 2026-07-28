@@ -81,21 +81,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div class="panel yaml-editor-panel">
-        <div class="panel-title">hardware.yaml</div>
-        <div ref="editorHost" class="editor-host"></div>
-    </div>
+    <div ref="editorHost" class="editor-host"></div>
 </template>
 
 <style scoped>
-.yaml-editor-panel {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 300px;
-    flex: 1;
-}
-
 .editor-host {
     flex: 1;
     overflow: hidden;

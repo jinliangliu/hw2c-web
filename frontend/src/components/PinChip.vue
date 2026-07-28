@@ -12,6 +12,10 @@ import { pinBusColor } from '../composables/BusColorMap'
 
 const props = defineProps<{
     pins: PinModel[]
+    /** Pin IDs with constraint errors (e.g. AF conflict, reserved pin) */
+    conflicts?: Set<string>
+    /** Pin IDs with constraint warnings */
+    warnings?: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -123,18 +127,26 @@ const pinPads = computed<PinPad[]>(() =>
 )
 
 /* ---- Colors ---- */
+const RESERVED_IDS = new Set(['PA13', 'PA14', 'PF0', 'PF1', 'PC13', 'PC14', 'PC15'])
+
 function padFill(pad: PinPad): string {
-    if (pad.pp.isPower) return '#1a1a2e'
+    if (pad.pp.isPower) return '#ef4444'          // Power — red
+    if (RESERVED_IDS.has(pad.pp.id)) return '#ef4444'  // SWD/OSC — red
     if (!pad.assigned?.function) return '#1e2430'
     return pinBusColor(pad.assigned.function)
 }
 
 function padStroke(pad: PinPad): string {
+    if (pad.pp.isPower) return '#dc2626'          // Power — darker red
+    if (RESERVED_IDS.has(pad.pp.id)) return '#dc2626'  // SWD/OSC — darker red
+    if (props.conflicts?.has(pad.pp.id)) return '#ef4444'  // red conflict
+    if (props.warnings?.has(pad.pp.id)) return '#f59e0b'    // amber warning
     return '#c9a84c'  // gold pin outline
 }
 
 function padOpacity(pad: PinPad): number {
-    if (pad.pp.isPower) return 0.4
+    if (pad.pp.isPower) return 1
+    if (RESERVED_IDS.has(pad.pp.id)) return 1
     if (!pad.assigned?.function) return 0.5
     return 1
 }
@@ -151,6 +163,13 @@ function labelText(pad: PinPad): string {
 
 function isHighlighted(pad: PinPad): boolean {
     return !!pad.assigned?.function && !pad.pp.isPower
+}
+
+function padClass(pad: PinPad): string {
+    const cls = ['pad-rect']
+    if (props.conflicts?.has(pad.pp.id)) cls.push('pad-conflict')
+    if (props.warnings?.has(pad.pp.id)) cls.push('pad-warning')
+    return cls.join(' ')
 }
 
 /* ---- Hover tooltip state ---- */
@@ -265,7 +284,7 @@ const stats = computed(() => {
                         :stroke="padStroke(pad)"
                         :stroke-width="isHighlighted(pad) ? 1.5 : 0.8"
                         :opacity="padOpacity(pad)"
-                        class="pad-rect"
+                        :class="padClass(pad)"
                     />
 
                     <!-- Pin number -->
@@ -339,10 +358,10 @@ const stats = computed(() => {
                 <span class="legend-dot" style="background: #8b5cf6"></span> GPIO
             </div>
             <div class="legend-item">
-                <span class="legend-dot" style="background: #2d3748"></span> Power
+                <span class="legend-dot" style="background: #ef4444"></span> Power
             </div>
             <div class="legend-item">
-                <span class="legend-dot" style="background: #6b7280"></span> SWD
+                <span class="legend-dot" style="background: #ef4444"></span> SWD
             </div>
         </div>
     </div>
@@ -399,6 +418,24 @@ const stats = computed(() => {
 .pin-group:hover .pad-rect {
     stroke-width: 2.5 !important;
     opacity: 1 !important;
+}
+
+/* Validation feedback */
+.pad-conflict {
+    stroke-width: 2.5 !important;
+    animation: pulse-conflict 1.2s ease-in-out infinite;
+}
+.pad-warning {
+    stroke-width: 2 !important;
+    animation: pulse-warning 1.8s ease-in-out infinite;
+}
+@keyframes pulse-conflict {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+@keyframes pulse-warning {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
 }
 
 .tooltip-g {

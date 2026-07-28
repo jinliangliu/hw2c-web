@@ -14,12 +14,42 @@ import { load, dump } from 'js-yaml'
 export interface ProjectModel {
     name: string
     version: string
+    /** FreeRTOS heap size in bytes (configTOTAL_HEAP_SIZE) */
+    heap_size: number
 }
 
 export interface AppTaskModel {
     name: string
     priority: number
     stack_size: number
+    /** Entry function name, e.g. "vSensorTask" */
+    entry: string
+    /** Scheduling type */
+    type: 'periodic' | 'continuous' | 'event_driven' | 'one_shot'
+    /** Auto-create on boot */
+    auto_start: boolean
+    /** Period in ms (periodic tasks only) */
+    period_ms?: number
+}
+
+/**
+ * Global event dispatcher task configuration.
+ *
+ * All timer / periodic / one-shot events are posted to a single FreeRTOS
+ * queue consumed by this task.  The event task preprocesses and dispatches
+ * to the appropriate application tasks.
+ */
+export interface EventTaskConfig {
+    /** Task name, appears in FreeRTOS trace */
+    name: string
+    /** Entry function name */
+    entry: string
+    /** FreeRTOS priority (1-5) */
+    priority: number
+    /** Stack size in bytes */
+    stack_size: number
+    /** Maximum number of queued events */
+    queue_depth: number
 }
 
 export interface VariableModel {
@@ -71,6 +101,8 @@ export interface BehaviorModel {
 
 export interface TaskModel {
     project: ProjectModel
+    /** Global event dispatcher task + queue config */
+    event_task: EventTaskConfig
     app_tasks: AppTaskModel[]
     behavior: BehaviorModel | null
 }
@@ -81,7 +113,14 @@ export interface TaskModel {
 
 function defaultModel(): TaskModel {
     return {
-        project: { name: 'untitled', version: '0.1.0' },
+        project: { name: 'untitled', version: '0.1.0', heap_size: 16384 },
+        event_task: {
+            name: 'event_task',
+            entry: 'vEventTask',
+            priority: 3,
+            stack_size: 1024,
+            queue_depth: 32,
+        },
         app_tasks: [],
         behavior: null,
     }
@@ -93,15 +132,37 @@ function defaultModel(): TaskModel {
 
 function modelToYaml(model: TaskModel): string {
     const doc: Record<string, unknown> = {
-        project: { name: model.project.name, version: model.project.version },
+        project: {
+            name: model.project.name,
+            version: model.project.version,
+            heap_size: model.project.heap_size,
+        },
+    }
+
+    /* Global event task */
+    doc.event_task = {
+        name: model.event_task.name,
+        entry: model.event_task.entry,
+        priority: model.event_task.priority,
+        stack_size: model.event_task.stack_size,
+        queue_depth: model.event_task.queue_depth,
     }
 
     if (model.app_tasks.length > 0) {
-        doc.app_tasks = model.app_tasks.map(t => ({
-            name: t.name,
-            priority: t.priority,
-            stack_size: t.stack_size,
-        }))
+        doc.app_tasks = model.app_tasks.map(t => {
+            const o: Record<string, unknown> = {
+                name: t.name,
+                priority: t.priority,
+                stack_size: t.stack_size,
+                entry: t.entry,
+                type: t.type,
+                auto_start: t.auto_start,
+            }
+            if (t.type === 'periodic' && t.period_ms) {
+                o.period_ms = t.period_ms
+            }
+            return o
+        })
     }
 
     if (model.behavior && Object.keys(model.behavior).length > 0) {
@@ -123,6 +184,18 @@ export function yamlToModel(text: string): TaskModel {
             model.project = {
                 name: String(p.name ?? 'untitled'),
                 version: String(p.version ?? '0.1.0'),
+                heap_size: Number(p.heap_size ?? 16384),
+            }
+        }
+
+        if (doc.event_task && typeof doc.event_task === 'object') {
+            const et = doc.event_task as Record<string, unknown>
+            model.event_task = {
+                name: String(et.name ?? 'event_task'),
+                entry: String(et.entry ?? 'vEventTask'),
+                priority: Number(et.priority ?? 3),
+                stack_size: Number(et.stack_size ?? 1024),
+                queue_depth: Number(et.queue_depth ?? 32),
             }
         }
 
@@ -131,6 +204,12 @@ export function yamlToModel(text: string): TaskModel {
             name: String(t.name ?? ''),
             priority: Number(t.priority ?? 3),
             stack_size: Number(t.stack_size ?? 512),
+            entry: String(t.entry ?? `v${String(t.name ?? 'task')}`),
+            type: (['periodic', 'continuous', 'event_driven', 'one_shot'].includes(String(t.type ?? ''))
+                ? String(t.type)
+                : 'continuous') as AppTaskModel['type'],
+            auto_start: Boolean(t.auto_start ?? true),
+            period_ms: t.period_ms ? Number(t.period_ms) : undefined,
         }))
 
         model.behavior = (doc.behavior as BehaviorModel) ?? null
@@ -192,6 +271,16 @@ export function useTaskModel(yamlRef: Ref<string>) {
         flushToYaml()
     }
 
+    function writeHeapSize(size: number) {
+        model.project.heap_size = size
+        flushToYaml()
+    }
+
+    function writeEventTask(partial: Partial<EventTaskConfig>) {
+        Object.assign(model.event_task, partial)
+        flushToYaml()
+    }
+
     function loadFromApi(yamlText: string) {
         syncing = true
         yamlRef.value = yamlText
@@ -207,6 +296,8 @@ export function useTaskModel(yamlRef: Ref<string>) {
         addTask,
         removeTask,
         setBehavior,
+        writeHeapSize,
+        writeEventTask,
         loadFromApi,
     }
 }

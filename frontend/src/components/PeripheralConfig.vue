@@ -58,17 +58,23 @@ function configKey(t: string): string {
         <I2CConfig
             v-if="configKey(peripheral.type) === 'i2c'"
             :peripheral="peripheral"
-            @update="onPeripheralUpdate"
+            :pins="pins"
+            @update-peripheral="onPeripheralUpdate"
+            @update-pin="onPinUpdate"
         />
         <SPIConfig
             v-else-if="configKey(peripheral.type) === 'spi'"
             :peripheral="peripheral"
-            @update="onPeripheralUpdate"
+            :pins="pins"
+            @update-peripheral="onPeripheralUpdate"
+            @update-pin="onPinUpdate"
         />
         <UARTConfig
             v-else-if="configKey(peripheral.type) === 'uart'"
             :peripheral="peripheral"
-            @update="onPeripheralUpdate"
+            :pins="pins"
+            @update-peripheral="onPeripheralUpdate"
+            @update-pin="onPinUpdate"
         />
         <GPIOConfig
             v-else

@@ -14,10 +14,16 @@ import PinChip from './components/PinChip.vue'
 import PeripheralList from './components/PeripheralList.vue'
 import PeripheralConfig from './components/PeripheralConfig.vue'
 import TaskAllocator from './components/TaskAllocator.vue'
-import TaskGraph from './components/TaskGraph.vue'
 import BindGraph from './components/BindGraph.vue'
 import ClockTree from './components/ClockTree.vue'
+import BankPartition from './components/BankPartition.vue'
+import PinAfSelector from './components/PinAfSelector.vue'
+import StateMachineEditor from './components/StateMachineEditor.vue'
+import SleepConfig from './components/SleepConfig.vue'
 import YamlEditor from './components/YamlEditor.vue'
+import PdfViewer from './components/PdfViewer.vue'
+import { validate, type PinAssignment } from './composables/ConstraintEngine'
+import { getMcuDocUrls } from './composables/useMcudoc'
 
 // ---- Reactive state ----
 const results       = ref<ParseResponse | null>(null)
@@ -30,20 +36,21 @@ const selectedPeriIdx = ref(-1)
 const generating    = ref(false)
 const genError      = ref('')
 
-/** Active tab: 0=Hardware, 1=Tasks, 2=Bind, 3=YAML */
-const activeTab = ref<'chip' | 'tasks' | 'bind' | 'yaml'>('chip')
+/** Active tab: 0=Hardware, 1=Tasks, 2=Bind, 3=Behavior, 4=YAML */
+const activeTab = ref<'chip' | 'clock' | 'bank' | 'tasks' | 'bind' | 'behavior' | 'yaml'>('chip')
 
 // ---- Three-layer models ----
 const {
     model: hwModel,
     writePin, addPin, removePin,
     writePeripheral, addPeripheral, removePeripheral,
+    writeSleep, writeClock, writeFlashPartitions,
     loadFromApi: loadHw,
 } = useHardwareModel(hardwareYamlRef)
 
 const {
     model: taskModel,
-    writeTask, addTask, removeTask,
+    writeTask, addTask, removeTask, setBehavior, writeHeapSize, writeEventTask, writeProject,
     loadFromApi: loadTask,
 } = useTaskModel(taskYamlRef)
 
@@ -75,6 +82,51 @@ const peripheralNames = computed(() =>
 const hasRtc = computed(() =>
     viewPeripherals.value.some(p => p.type === 'Internal_RTC')
 )
+
+/** Selected pin for AF assignment popup */
+const selectedPin = ref<string | null>(null)
+
+/** Datasheet PDF viewer */
+const showDatasheet = ref(false)
+const dsUrls = ref<{ datasheet_url: string | null; reference_manual_url: string | null }>({
+    datasheet_url: null,
+    reference_manual_url: null,
+})
+
+function openDatasheet() {
+    const part = hwModel.mcu.part
+    if (!part) return
+    dsUrls.value = getMcuDocUrls(part)
+    showDatasheet.value = true
+}
+
+/** Real-time pin constraint validation */
+const validationResult = computed(() => {
+    const assignments: PinAssignment[] = viewPins.value.map(p => ({
+        pinId: p.id,
+        function: p.function,
+        af: p.af,
+    }))
+    return validate(assignments)
+})
+
+const conflictPins = computed(() =>
+    new Set(validationResult.value.issues
+        .filter(i => i.severity === 'error')
+        .flatMap(i => i.pins))
+)
+
+const warningPins = computed(() =>
+    new Set(validationResult.value.issues
+        .filter(i => i.severity === 'warning')
+        .flatMap(i => i.pins))
+)
+
+/** Count of constraint issues by severity */
+const validationBadge = computed(() => ({
+    errors: conflictPins.value.size,
+    warnings: warningPins.value.size,
+}))
 
 /** EXTI-capable pins for BindGraph */
 const extiPins = computed(() =>
@@ -201,6 +253,34 @@ function handleRemoveTask(index: number) {
     removeTask(index)
 }
 
+function handleUpdateHeap(size: number) {
+    writeHeapSize(size)
+}
+
+function handleUpdateEventTask(partial: Record<string, unknown>) {
+    writeEventTask(partial as any)
+}
+
+/* ---- Project rename ---- */
+const editingProject = ref(false)
+const editProjectName = ref('')
+const projectNameInput = ref<HTMLInputElement | null>(null)
+
+function startProjectRename() {
+    editProjectName.value = taskModel.project.name
+    editingProject.value = true
+    /* Focus after Vue renders the input */
+    setTimeout(() => { projectNameInput.value?.focus(); projectNameInput.value?.select() }, 50)
+}
+
+function commitProjectRename() {
+    editingProject.value = false
+    const name = editProjectName.value.trim()
+    if (name && name !== taskModel.project.name) {
+        writeProject({ name })
+    }
+}
+
 // ---- Bind handlers ----
 function handleAddInterrupt(binding: { pin: string; task: string; event: string }) {
     addInterrupt(binding)
@@ -228,6 +308,46 @@ function handleRemoveRouting(index: number) {
 
 function handleUpdateRouting(index: number, field: string, value: unknown) {
     writeRouting(index, field as any, value)
+}
+
+/** Update behavior (state machine) */
+function handleUpdateBehavior(newBehavior: Record<string, unknown>) {
+    taskModel.behavior = newBehavior as any
+    setBehavior(newBehavior as any)
+}
+
+/** Pin selection for AF assignment */
+function handlePinSelect(pinId: string) {
+    selectedPin.value = selectedPin.value === pinId ? null : pinId
+}
+
+/** Assign a pin to a new AF function */
+function handleAssignFunction(pinId: string, afFunction: string, af: number) {
+    const idx = viewPins.value.findIndex(p => p.id === pinId)
+    if (idx < 0) return
+    writePin(idx, 'function', afFunction)
+    writePin(idx, 'af', af)
+    selectedPin.value = null
+}
+
+/** Update GPIO config from PinAfSelector */
+function handleUpdateGpio(pinId: string, field: string, value: unknown) {
+    const idx = viewPins.value.findIndex(p => p.id === pinId)
+    if (idx < 0) return
+    writePin(idx, field as any, value)
+}
+
+/** Update sleep / low-power configuration */
+function handleUpdateSleep(sleep: import('./composables/useHardwareModel').SleepModel) {
+    writeSleep(sleep)
+}
+
+function handleUpdateClock(partial: Record<string, unknown>) {
+    writeClock(partial as any)
+}
+
+function handleUpdateFlashPartitions(partitions: import('./composables/useHardwareModel').FlashPartition[]) {
+    writeFlashPartitions(partitions)
 }
 </script>
 
@@ -257,8 +377,9 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                 <!-- MCU card -->
                 <div v-if="hwModel.mcu.part" class="panel mcu-card">
                     <div class="panel-title">MCU</div>
-                    <div class="mcu-chip">
+                    <div class="mcu-chip" @click="openDatasheet">
                         <code>{{ hwModel.mcu.part }}</code>
+                        <span class="datasheet-icon" title="View Datasheet">&#128196;</span>
                         <span class="tag tag-mcu">{{ hwModel.mcu.core_clock_mhz }} MHz</span>
                     </div>
                     <div v-if="hwModel.mcu.core" class="mcu-core-info">
@@ -280,8 +401,23 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                 <!-- Project info -->
                 <div v-if="results?.project" class="panel project-card">
                     <div class="panel-title">Project</div>
-                    <div class="project-name">{{ results.project.name }}</div>
-                    <div class="project-ver">v{{ results.project.version }}</div>
+                    <div class="project-name" v-if="editingProject" @click.stop>
+                        <input
+                            ref="projectNameInput"
+                            v-model="editProjectName"
+                            class="project-name-input"
+                            @keyup.enter="commitProjectRename"
+                            @keyup.escape="editingProject = false"
+                            @blur="commitProjectRename"
+                        />
+                    </div>
+                    <div
+                        v-else
+                        class="project-name project-name-editable"
+                        @click="startProjectRename"
+                        title="Click to rename"
+                    >{{ taskModel.project.name }}</div>
+                    <div class="project-ver">v{{ taskModel.project.version }}</div>
                 </div>
 
                 <!-- Topology graph -->
@@ -291,14 +427,11 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                     :peripherals="viewPeripherals"
                 />
 
-                <!-- Peripheral list -->
-                <PeripheralList
-                    v-if="viewPeripherals.length"
-                    :peripherals="viewPeripherals"
-                    :pins="viewPins"
-                    :selected-index="selectedPeriIdx"
-                    @select="handleSelectPeripheral"
-                    @remove="handleRemovePeripheral"
+                <!-- Sleep / low-power -->
+                <SleepConfig
+                    v-if="results"
+                    :sleep="hwModel.sleep"
+                    @update-sleep="handleUpdateSleep"
                 />
 
                 <!-- Peripheral config -->
@@ -336,7 +469,17 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                     <button
                         :class="['tab-btn', { active: activeTab === 'chip' }]"
                         @click="activeTab = 'chip'"
-                    >Hardware</button>
+                    >Chip</button>
+                    <button
+                        :class="['tab-btn', { active: activeTab === 'clock' }]"
+                        @click="activeTab = 'clock'"
+                        :disabled="!results"
+                    >Clock</button>
+                    <button
+                        :class="['tab-btn', { active: activeTab === 'bank' }]"
+                        @click="activeTab = 'bank'"
+                        :disabled="!results"
+                    >Bank</button>
                     <button
                         :class="['tab-btn', { active: activeTab === 'tasks' }]"
                         @click="activeTab = 'tasks'"
@@ -354,6 +497,15 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                         </span>
                     </button>
                     <button
+                        :class="['tab-btn', { active: activeTab === 'behavior' }]"
+                        @click="activeTab = 'behavior'"
+                    >
+                        Behavior
+                        <span class="tab-count" v-if="taskModel.behavior?.states?.length">
+                            {{ taskModel.behavior.states.length }}
+                        </span>
+                    </button>
+                    <button
                         :class="['tab-btn', { active: activeTab === 'yaml' }]"
                         @click="activeTab = 'yaml'"
                     >YAML</button>
@@ -361,13 +513,48 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
 
                 <!-- Tab: Hardware -->
                 <div v-show="activeTab === 'chip'" class="tab-content">
+                    <!-- Validation badge -->
+                    <div v-if="validationBadge.errors || validationBadge.warnings" class="validation-bar">
+                        <span v-if="validationBadge.errors" class="val-badge val-error">
+                            {{ validationBadge.errors }} pin conflict(s)
+                        </span>
+                        <span v-if="validationBadge.warnings" class="val-badge val-warn">
+                            {{ validationBadge.warnings }} warning(s)
+                        </span>
+                    </div>
+
                     <PinChip
                         :pins="viewPins"
-                        @select-pin="() => {}"
+                        :conflicts="conflictPins"
+                        :warnings="warningPins"
+                        @select-pin="handlePinSelect"
                     />
-                    <div v-if="hwModel.clock" class="panel">
-                        <ClockTree :clock="hwModel.clock" />
-                    </div>
+                    <PeripheralList
+                        v-if="viewPeripherals.length"
+                        :peripherals="viewPeripherals"
+                        :pins="viewPins"
+                        :selected-index="selectedPeriIdx"
+                        @select="handleSelectPeripheral"
+                        @remove="handleRemovePeripheral"
+                    />
+                </div>
+
+                <!-- Tab: Clock -->
+                <div v-show="activeTab === 'clock'" class="tab-content">
+                    <ClockTree
+                        :clock="hwModel.clock"
+                        @update-clock="handleUpdateClock"
+                    />
+                </div>
+
+                <!-- Tab: Bank -->
+                <div v-show="activeTab === 'bank'" class="tab-content">
+                    <BankPartition
+                        :flash-kb="hwModel.mcu.flash_kb"
+                        :dual-bank="hwModel.mcu.dual_bank"
+                        :partitions="hwModel.flash_partitions"
+                        @update-partitions="handleUpdateFlashPartitions"
+                    />
                 </div>
 
                 <!-- Tab: Tasks -->
@@ -376,16 +563,13 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                         :tasks="viewTasks"
                         :pins="viewPins"
                         :peripheral-names="peripheralNames"
+                        :heap-size="taskModel.project.heap_size"
+                        :event-task="taskModel.event_task"
                         @add-task="handleAddTask"
                         @remove-task="handleRemoveTask"
                         @update-task="handleUpdateTask"
-                    />
-                    <TaskGraph
-                        v-if="viewTasks.length"
-                        :tasks="viewTasks"
-                        :pins="viewPins"
-                        :has-rtc="hasRtc"
-                        @update-task="handleUpdateTask"
+                        @update-heap="handleUpdateHeap"
+                        @update-event-task="handleUpdateEventTask"
                     />
                 </div>
 
@@ -406,6 +590,14 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                         @add-routing="handleAddRouting"
                         @remove-routing="handleRemoveRouting"
                         @update-routing="handleUpdateRouting"
+                    />
+                </div>
+
+                <!-- Tab: Behavior -->
+                <div v-show="activeTab === 'behavior'" class="tab-content">
+                    <StateMachineEditor
+                        :behavior="taskModel.behavior"
+                        @update-behavior="handleUpdateBehavior"
                     />
                 </div>
 
@@ -449,6 +641,17 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                 </div>
             </section>
 
+            <!-- Pin AF Selector Popup -->
+            <PinAfSelector
+                v-if="selectedPin"
+                :pin-id="selectedPin"
+                :pins="viewPins"
+                :conflicts="conflictPins"
+                @assign-function="handleAssignFunction"
+                @update-gpio="handleUpdateGpio"
+                @close="selectedPin = null"
+            />
+
             <!-- Empty state -->
             <div class="empty-state" v-if="!results && !loading">
                 <div class="empty-state-inner">
@@ -466,6 +669,15 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
                 </div>
             </div>
         </main>
+
+        <!-- Datasheet PDF viewer -->
+        <PdfViewer
+            v-if="showDatasheet"
+            :part="hwModel.mcu.part"
+            :datasheet-url="dsUrls.datasheet_url"
+            :reference-manual-url="dsUrls.reference_manual_url"
+            @close="showDatasheet = false"
+        />
     </div>
 </template>
 
@@ -473,6 +685,25 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
 .app-shell { display: flex; flex-direction: column; min-height: 100vh; }
 .header-sub { font-size: 0.8rem; color: var(--text-dim); }
 .header-spacer { flex: 1; }
+
+/* ---- MCU chip clickable ---- */
+.mcu-chip {
+    cursor: pointer;
+    position: relative;
+}
+.mcu-chip:hover {
+    opacity: 0.85;
+}
+.mcu-chip:hover .datasheet-icon {
+    opacity: 1;
+}
+.datasheet-icon {
+    font-size: 0.85rem;
+    margin-left: 0.15rem;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+    vertical-align: middle;
+}
 .shortcuts-hint {
     font-size: 0.65rem;
     color: var(--text-dim);
@@ -544,6 +775,29 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
     flex-direction: column;
     gap: 1rem;
     padding: 1rem 0 0 0;
+}
+
+/* Validation bar */
+.validation-bar {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.val-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 99px;
+}
+.val-error {
+    background: rgba(239,68,68,0.15);
+    color: #f87171;
+    border: 1px solid rgba(239,68,68,0.4);
+}
+.val-warn {
+    background: rgba(245,158,11,0.12);
+    color: #fbbf24;
+    border: 1px solid rgba(245,158,11,0.35);
 }
 .tab-yaml {
     padding-top: 0.5rem;
@@ -619,6 +873,15 @@ function handleUpdateRouting(index: number, field: string, value: unknown) {
 
 .project-card { text-align: center; }
 .project-name { font-size: 1rem; font-weight: 700; }
+.project-name-editable { cursor: pointer; transition: color 0.15s; }
+.project-name-editable:hover { color: var(--accent); }
+.project-name-input {
+    font-size: 1rem; font-weight: 700; text-align: center;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--accent); border-radius: 4px;
+    padding: 2px 8px; width: 100%; outline: none;
+    font-family: inherit;
+}
 .project-ver { font-size: 0.7rem; color: var(--text-dim); }
 
 .tag-mcu {
