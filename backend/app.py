@@ -6,8 +6,10 @@ Start: cd web/backend && uvicorn app:app --reload --port 8000
 import sys
 from pathlib import Path
 
+from paths import get_hw2c_root
+
 # Ensure hw2c sibling project is importable
-_HW2C_ROOT = Path(__file__).resolve().parents[2] / "hw2c"
+_HW2C_ROOT = get_hw2c_root()
 if _HW2C_ROOT.exists() and str(_HW2C_ROOT) not in sys.path:
     sys.path.insert(0, str(_HW2C_ROOT))
 

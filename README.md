@@ -26,13 +26,16 @@ flowchart LR
         B4["Tasks<br>FreeRTOS Tasks"]
         B5["Bind<br>HW ↔ SW Wiring"]
         B6["Behavior<br>State Machine"]
-        B7["YAML<br>3-Layer DSL"]
+        B7["YAML<br>6-Layer DSL"]
     end
 
     subgraph Output["Output"]
         C1[("hardware.yaml")]
         C2[("task.yaml")]
-        C3[("bind.yaml")]
+        C3[("components.yaml")]
+        C4[("bind.yaml")]
+        C5[("params.yaml")]
+        C6[("pubsub.yaml")]
     end
 
     Input --> Tabs --> Output
@@ -50,7 +53,7 @@ flowchart LR
 | **Tasks** | FreeRTOS task CRUD (name/entry/type/priority/stack), global Event Task dispatcher with configurable queue depth, heap size presets |
 | **Bind** | Interrupt bindings (EXTI → Task), peripheral assignments (Peripheral → Task), task-to-task routing |
 | **Behavior** | State machine editor for per-task behavior modeling |
-| **YAML** | `hardware.yaml` / `task.yaml` / `bind.yaml` three-pane CodeMirror editors, Ctrl+S download, Ctrl+G generate |
+| **YAML** | `hardware.yaml` / `task.yaml` / `components.yaml` / `bind.yaml` / `params.yaml` / `pubsub.yaml` six-pane CodeMirror editors, Ctrl+S download, Ctrl+G generate |
 
 ### Key Features
 
@@ -80,6 +83,7 @@ flowchart LR
 
 - Python 3.10+ (hw2c installed: `pip install -e ../hw2c`)
 - Node.js 18+
+- Backend automatically resolves the sibling hw2c checkout; set `HW2C_ROOT=/absolute/path/to/hw2c` if it lives elsewhere.
 - Workspace layout:
   ```
   your-workspace/
@@ -116,14 +120,24 @@ Open `http://localhost:5173` in your browser.
 7. Review/edit DSL in the YAML tab
 8. Click Generate or Ctrl+G to download firmware ZIP
 
+## Deployment Model
+
+hw2c-web is a local/self-hosted technical tool. Run the FastAPI backend and
+Vite frontend together; the backend must have access to an hw2c checkout and
+its vendored submodules.
+
+The GitHub Pages workflow builds only the frontend as a static preview.
+`/api/*` is not available in that static deployment, so firmware generation
+must be done locally or against your own self-hosted backend.
+
 ---
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/parse` | Upload netlist + BOM; returns structured data and three-layer YAML |
-| `POST` | `/api/generate` | Submit three-layer YAML; returns firmware ZIP |
+| `POST` | `/api/parse` | Upload netlist + BOM; returns structured data plus six-layer YAML with minimal components/params/pubsub defaults |
+| `POST` | `/api/generate` | Submit six-layer YAML; returns firmware ZIP |
 | `GET` | `/api/health` | Health check |
 
 ### `/api/parse` Request
@@ -145,7 +159,10 @@ multipart/form-data:
   "clock": { "sysclk": { "source": "HSE_PLL", "frequency_hz": 64000000 } },
   "hardware_yaml": "...",
   "task_yaml": "...",
+  "components_yaml": "...",
   "bind_yaml": "...",
+  "params_yaml": "...",
+  "pubsub_yaml": "...",
   "project": { "name": "untitled", "version": "0.1.0" },
   "bind": { "interrupt": [], "peripheral_assign": [], "routing": [] }
 }
@@ -153,31 +170,71 @@ multipart/form-data:
 
 ---
 
-## Three-Layer YAML DSL
+## Six-Layer YAML DSL
 
-### `task.yaml` (project + tasks + event_task)
+hw2c v0.4.0 uses six configuration layers. The web UI currently has structured editors for `hardware.yaml`, `task.yaml`, and `bind.yaml`; `components.yaml`, `params.yaml`, and `pubsub.yaml` are editable as raw YAML in the YAML tab.
+
+### `task.yaml` (project + event task + behavior + periodic events)
 
 ```yaml
 project:
   name: my_project
   version: '0.1.0'
-  heap_size: 16384
+  heap_size: 24576
 
 event_task:
-  name: event_task
+  name: events_process_task
   entry: vEventTask
   priority: 3
-  stack_size: 1024
-  queue_depth: 32
+  stack_size: 512
+  queue_depth: 16
 
-app_tasks:
-  - name: sensor_read
-    entry: vSensorTask
-    priority: 3
-    stack_size: 512
-    type: periodic
-    auto_start: true
-    period_ms: 1000
+behavior:
+  initial_state: IDLE
+  states:
+    - name: IDLE
+      transitions:
+        - event: SENSOR_READY
+          target: ACTIVE
+
+periodic_events:
+  - event: SECONDS_30
+    actions:
+      - telemetry_snapshot
+```
+
+### `components.yaml` (component registry)
+
+```yaml
+components:
+  - name: led
+    type: led
+    driver: gpio
+    period_ms: 50
+    sleep_compat: STOP1
+    config:
+      default_pattern: off
+```
+
+### `params.yaml` (runtime parameters)
+
+```yaml
+params:
+  - name: led_brightness
+    component: shell
+    type: uint32
+    default: 200
+    min: 0
+    max: 255
+```
+
+### `pubsub.yaml` (component event bus)
+
+```yaml
+topics:
+  - name: led_state
+    description: "LED on/off state change"
+    value: { type: uint32, unit: "0/1" }
 ```
 
 ### `bind.yaml` (HW ↔ SW wiring)
@@ -265,7 +322,7 @@ flowchart TB
         BANK --> TASK["Tasks Tab<br>TaskAllocator + Event Task"]
         TASK --> BIND["Bind Tab<br>BindGraph"]
         BIND --> BEH["Behavior Tab<br>StateMachine"]
-        BEH --> YAML["YAML Tab<br>3-Layer Editors"]
+        BEH --> YAML["YAML Tab<br>6-Layer Editors"]
     end
 
     subgraph API["FastAPI Backend :8000"]

@@ -2,7 +2,7 @@
 /**
  * TaskAllocator.vue — FreeRTOS task configuration.
  *
- * Expanded: entry function, task type, auto-start, period (periodic only).
+ * Task definition matches hw2c task.yaml app_tasks: name, priority, stack_size.
  * Global event_task dispatcher configuration with queue depth.
  */
 import { ref, computed } from 'vue'
@@ -31,33 +31,21 @@ const emit = defineEmits<{
 /* ---- New task form ---- */
 const showForm = ref(false)
 const newName = ref('')
-const newEntry = ref('')
 const newPriority = ref(3)
 const newStack = ref(512)
-const newType = ref<AppTaskModel['type']>('continuous')
-const newAutoStart = ref(true)
-const newPeriod = ref(1000)
 
 function resetForm() {
     newName.value = ''
-    newEntry.value = ''
     newPriority.value = 3
     newStack.value = 512
-    newType.value = 'continuous'
-    newAutoStart.value = true
-    newPeriod.value = 1000
 }
 
 function handleAdd() {
     if (!newName.value.trim()) return
     emit('add-task', {
         name: newName.value.trim(),
-        entry: newEntry.value.trim() || `v${newName.value.trim()}`,
         priority: newPriority.value,
         stack_size: newStack.value,
-        type: newType.value,
-        auto_start: newAutoStart.value,
-        period_ms: newType.value === 'periodic' ? newPeriod.value : undefined,
     })
     resetForm()
     showForm.value = false
@@ -79,22 +67,6 @@ function priorityLabel(p: number): string {
 function priorityColor(p: number): string {
     const colors: Record<number, string> = { 1: '#6b7280', 2: '#3b82f6', 3: '#10b981', 4: '#f59e0b', 5: '#ef4444' }
     return colors[p] ?? '#10b981'
-}
-
-function typeLabel(t: AppTaskModel['type']): string {
-    const labels: Record<string, string> = {
-        periodic: 'Periodic', continuous: 'Continuous',
-        event_driven: 'Event', one_shot: 'Once',
-    }
-    return labels[t] ?? t
-}
-
-function typeColor(t: AppTaskModel['type']): string {
-    const colors: Record<string, string> = {
-        periodic: '#06b6d4', continuous: '#10b981',
-        event_driven: '#f59e0b', one_shot: '#8b5cf6',
-    }
-    return colors[t] ?? '#10b981'
 }
 
 /* ---- Inline editing state per task ---- */
@@ -255,24 +227,6 @@ function updateEventField(field: string, value: unknown) {
                 @keyup.enter="showForm && handleAdd()"
             />
 
-            <input
-                v-model="newEntry"
-                type="text"
-                :placeholder="`Entry function (e.g. v${newName || 'task'})`"
-                class="input"
-                @keyup.enter="showForm && handleAdd()"
-            />
-
-            <div class="form-row">
-                <label class="form-label">Type</label>
-                <select v-model="newType" class="input">
-                    <option value="periodic">Periodic</option>
-                    <option value="continuous">Continuous</option>
-                    <option value="event_driven">Event-Driven</option>
-                    <option value="one_shot">One-Shot</option>
-                </select>
-            </div>
-
             <div class="form-row">
                 <label class="form-label">
                     Priority: <strong>{{ priorityLabel(newPriority) }}</strong>
@@ -285,16 +239,6 @@ function updateEventField(field: string, value: unknown) {
                     Stack: <strong>{{ newStack }} B</strong>
                 </label>
                 <input v-model.number="newStack" type="range" min="128" max="4096" step="128" class="slider" />
-            </div>
-
-            <div v-if="newType === 'periodic'" class="form-row">
-                <label class="form-label">Period (ms)</label>
-                <input v-model.number="newPeriod" type="number" min="1" max="86400000" class="input" />
-            </div>
-
-            <div class="form-row toggle-row">
-                <label class="form-label">Auto-start on boot</label>
-                <input type="checkbox" v-model="newAutoStart" />
             </div>
 
             <button class="btn btn-primary btn-confirm" @click="handleAdd">Add Task</button>
@@ -325,30 +269,11 @@ function updateEventField(field: string, value: unknown) {
                             :style="{ background: priorityColor(task.priority) + '22', color: priorityColor(task.priority), borderColor: priorityColor(task.priority) }"
                         >{{ priorityLabel(task.priority) }}</span>
                         <span class="tag tag-stack">{{ task.stack_size }} B</span>
-                        <span
-                            class="tag tag-type"
-                            :style="{ background: typeColor(task.type) + '22', color: typeColor(task.type), borderColor: typeColor(task.type) }"
-                        >{{ typeLabel(task.type) }}</span>
-                    </div>
-
-                    <div class="task-sub" v-if="task.entry !== `v${task.name}` || task.type === 'periodic'">
-                        <code class="task-entry">{{ task.entry }}()</code>
-                        <span v-if="task.type === 'periodic' && task.period_ms" class="task-period">
-                            every {{ task.period_ms }}ms
-                        </span>
                     </div>
                 </div>
 
                 <!-- Actions -->
                 <div class="task-actions">
-                    <select class="select-mini" :value="task.type"
-                        @change="emit('update-task', idx, 'type', ($event.target as HTMLSelectElement).value)">
-                        <option value="periodic">Periodic</option>
-                        <option value="continuous">Continuous</option>
-                        <option value="event_driven">Event</option>
-                        <option value="one_shot">Once</option>
-                    </select>
-
                     <select class="select-mini" :value="task.priority"
                         @change="emit('update-task', idx, 'priority', Number(($event.target as HTMLSelectElement).value))">
                         <option v-for="p in 5" :key="p" :value="p">P{{ p }}</option>

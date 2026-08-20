@@ -22,14 +22,6 @@ export interface AppTaskModel {
     name: string
     priority: number
     stack_size: number
-    /** Entry function name, e.g. "vSensorTask" */
-    entry: string
-    /** Scheduling type */
-    type: 'periodic' | 'continuous' | 'event_driven' | 'one_shot'
-    /** Auto-create on boot */
-    auto_start: boolean
-    /** Period in ms (periodic tasks only) */
-    period_ms?: number
 }
 
 /**
@@ -150,18 +142,11 @@ function modelToYaml(model: TaskModel): string {
 
     if (model.app_tasks.length > 0) {
         doc.app_tasks = model.app_tasks.map(t => {
-            const o: Record<string, unknown> = {
+            return {
                 name: t.name,
                 priority: t.priority,
                 stack_size: t.stack_size,
-                entry: t.entry,
-                type: t.type,
-                auto_start: t.auto_start,
             }
-            if (t.type === 'periodic' && t.period_ms) {
-                o.period_ms = t.period_ms
-            }
-            return o
         })
     }
 
@@ -204,12 +189,6 @@ export function yamlToModel(text: string): TaskModel {
             name: String(t.name ?? ''),
             priority: Number(t.priority ?? 3),
             stack_size: Number(t.stack_size ?? 512),
-            entry: String(t.entry ?? `v${String(t.name ?? 'task')}`),
-            type: (['periodic', 'continuous', 'event_driven', 'one_shot'].includes(String(t.type ?? ''))
-                ? String(t.type)
-                : 'continuous') as AppTaskModel['type'],
-            auto_start: Boolean(t.auto_start ?? true),
-            period_ms: t.period_ms ? Number(t.period_ms) : undefined,
         }))
 
         model.behavior = (doc.behavior as BehaviorModel) ?? null

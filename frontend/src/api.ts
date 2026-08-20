@@ -13,7 +13,10 @@ export interface ParseResponse {
     yaml:        string                     /* [DEPRECATED] legacy monolithic */
     hardware_yaml: string
     task_yaml:   string
+    components_yaml: string
     bind_yaml:   string
+    params_yaml: string
+    pubsub_yaml: string
     project?:    ProjectInfo
     bind?:       BindInfo
     warning?:    string
@@ -174,7 +177,10 @@ export async function uploadNetlist(
 export async function generateFirmware(
     hardwareYaml: string,
     taskYaml: string = '',
+    componentsYaml: string = '',
     bindYaml: string = '',
+    paramsYaml: string = '',
+    pubsubYaml: string = '',
     projectName: string = 'firmware',
 ): Promise<Blob> {
     const resp = await fetch(`${BASE}/generate`, {
@@ -183,7 +189,10 @@ export async function generateFirmware(
         body: JSON.stringify({
             hardware_yaml: hardwareYaml,
             task_yaml: taskYaml,
+            components_yaml: componentsYaml,
             bind_yaml: bindYaml,
+            params_yaml: paramsYaml,
+            pubsub_yaml: pubsubYaml,
             project_name: projectName,
         }),
     })

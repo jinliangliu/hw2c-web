@@ -2,8 +2,8 @@
 /**
  * StateMachineEditor.vue — Visual state machine editor using Vue Flow.
  *
- * Nodes: State (rounded rect with entry/do/exit) and Choice (diamond).
- * Edges: Transition (arrow with event [guard] / action label).
+ * Nodes: State (rounded rect with on_entry/on_exit actions).
+ * Edges: Transition (arrow with event [guard] / actions label).
  *
  * Interactions:
  *   - Toolbar: Add State, Add Choice
@@ -48,22 +48,21 @@ const {
 /* ---- Local state ---- */
 interface StateData {
     label: string
-    entry?: string
-    doAction?: string
-    exit?: string
+    onEntry?: string
+    onExit?: string
     isInitial?: boolean
 }
 
 interface TransitionData {
     event: string
     guard?: string
-    action?: string
+    actionsText?: string
 }
 
 const selectedNodeId = ref<string | null>(null)
 const selectedEdgeId = ref<string | null>(null)
 const nextStateIdx = ref(3)
-const selectedStateData = ref<StateData>({ label: '', entry: '', doAction: '', exit: '' })
+const selectedStateData = ref<StateData>({ label: '', onEntry: '', onExit: '' })
 
 /* ---- Priority/type colors reused ---- */
 const STATE_COLOR = '#3b82f6'
@@ -75,7 +74,6 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
     const nodes: Node[] = []
     const edges: Edge[] = []
     const states = props.behavior?.states as any[] ?? []
-    const events = (props.behavior?.events as any[]) ?? []
     const initial = props.behavior?.initial_state ?? (states.length > 0 ? states[0]?.name ?? '' : '')
 
     // Simple vertical layout
@@ -90,34 +88,36 @@ function buildGraph(): { nodes: Node[]; edges: Edge[] } {
             position: { x: START_X + (i % 2) * 250, y: START_Y + Math.floor(i / 2) * GAP },
             data: {
                 label: s.name ?? `State${i}`,
-                entry: s.entry ?? '',
-                doAction: s.do ?? '',
-                exit: s.exit ?? '',
+                onEntry: Array.isArray(s.on_entry) ? s.on_entry.join('\n') : '',
+                onExit: Array.isArray(s.on_exit) ? s.on_exit.join('\n') : '',
                 isInitial: s.name === initial,
             },
         })
     })
 
-    // Build edges from events (simple transition format)
-    events.forEach((evt: any, i: number) => {
-        const fromIdx = states.findIndex((s: any) => s.name === (evt.from ?? evt.source))
-        const toIdx = states.findIndex((s: any) => s.name === (evt.to ?? evt.target))
-        if (fromIdx < 0 || toIdx < 0) return
+    // Build edges from the current hw2c schema:
+    // states[].transitions[] = { event, target, guard, actions }
+    states.forEach((s: any, fromIdx: number) => {
+        const transitions = Array.isArray(s.transitions) ? s.transitions : []
+        transitions.forEach((tr: any, edgeIdx: number) => {
+            const toIdx = states.findIndex((candidate: any) => candidate.name === tr.target)
+            if (toIdx < 0) return
 
-        edges.push({
-            id: `edge-${i}`,
-            source: `state-${fromIdx}`,
-            target: `state-${toIdx}`,
-            type: 'smoothstep',
-            label: evt.name ?? evt.event ?? '',
-            animated: false,
-            style: { stroke: EDGE_COLOR, strokeWidth: 2 },
-            markerEnd: MarkerType.ArrowClosed,
-            data: {
-                event: evt.name ?? evt.event ?? '',
-                guard: evt.guard ?? '',
-                action: evt.action ?? '',
-            },
+            edges.push({
+                id: `edge-${fromIdx}-${edgeIdx}`,
+                source: `state-${fromIdx}`,
+                target: `state-${toIdx}`,
+                type: 'smoothstep',
+                label: tr.event ?? '',
+                animated: false,
+                style: { stroke: EDGE_COLOR, strokeWidth: 2 },
+                markerEnd: MarkerType.ArrowClosed,
+                data: {
+                    event: tr.event ?? '',
+                    guard: tr.guard ?? '',
+                    actionsText: Array.isArray(tr.actions) ? tr.actions.join('\n') : '',
+                },
+            })
         })
     })
 
@@ -166,9 +166,8 @@ function addState() {
         position: { x, y },
         data: {
             label: `State${nextStateIdx.value}`,
-            entry: '',
-            doAction: '',
-            exit: '',
+            onEntry: '',
+            onExit: '',
             isInitial: nodes.length === 0,
         },
     })
@@ -189,7 +188,7 @@ function handleConnect(connection: Connection) {
         animated: false,
         style: { stroke: EDGE_COLOR, strokeWidth: 2 },
         markerEnd: MarkerType.ArrowClosed,
-        data: { event: '', guard: '', action: '' },
+        data: { event: '', guard: '', actionsText: '' },
     })
     addEdges(edges)
     emitCurrentModel()
@@ -202,34 +201,48 @@ function emitCurrentModel() {
 
     const states = nodes
         .filter(n => n.type === 'state-node' || n.id.startsWith('state'))
-        .map((n, i) => {
+        .map((n) => {
             const d = n.data as StateData
             return {
-                id: i,
                 name: d.label,
-                entry: d.entry || undefined,
-                do: d.doAction || undefined,
-                exit: d.exit || undefined,
+                on_entry: d.onEntry
+                    ? d.onEntry.split('\n').map((line: string) => line.trim()).filter(Boolean)
+                    : [],
+                on_exit: d.onExit
+                    ? d.onExit.split('\n').map((line: string) => line.trim()).filter(Boolean)
+                    : [],
+                transitions: [],
             }
         })
 
-    const events = edges.map(e => {
-        const d = e.data as TransitionData
-        const fromNode = nodes.find(n => n.id === e.source)
-        const toNode = nodes.find(n => n.id === e.target)
-        return {
-            name: d.event || 'unnamed',
-            from: (fromNode?.data as StateData)?.label ?? '',
-            to: (toNode?.data as StateData)?.label ?? '',
+    const stateNameByNodeId = new Map(
+        nodes
+            .filter(n => n.type === 'state-node' || n.id.startsWith('state'))
+            .map(n => [n.id, (n.data as StateData).label]),
+    )
+
+    for (const edge of edges) {
+        const d = edge.data as TransitionData
+        const fromName = stateNameByNodeId.get(edge.source)
+        const toName = stateNameByNodeId.get(edge.target)
+        if (!fromName || !toName) continue
+
+        const sourceState = states.find(s => s.name === fromName)
+        if (!sourceState) continue
+
+        sourceState.transitions.push({
+            event: d.event || 'unnamed',
+            target: toName,
             guard: d.guard || undefined,
-            action: d.action || undefined,
-        }
-    })
+            actions: d.actionsText
+                ? d.actionsText.split('\n').map((line: string) => line.trim()).filter(Boolean)
+                : [],
+        })
+    }
 
     emit('update-behavior', {
         initial_state: states.length > 0 ? states[0].name : '',
         states,
-        events,
         variables: props.behavior?.variables ?? [],
         types: props.behavior?.types ?? [],
     })
@@ -297,9 +310,8 @@ const nodeTypes: Record<string, Component> = {
   <div class="sm-state-icon" v-if="data.isInitial" style="background:#10b981;border-radius:50%;width:8px;height:8px;position:absolute;top:4px;left:4px;" title="Initial State"></div>
   <div class="sm-state-name">{{ data.label }}</div>
   <div class="sm-state-actions">
-    <div v-if="data.entry" class="sm-action sm-entry" title="On Entry">E: {{ data.entry }}</div>
-    <div v-if="data.doAction" class="sm-action sm-do" title="Do">D: {{ data.doAction }}</div>
-    <div v-if="data.exit" class="sm-action sm-exit" title="On Exit">X: {{ data.exit }}</div>
+    <div v-if="data.onEntry" class="sm-action sm-entry" title="On Entry">E: {{ data.onEntry }}</div>
+    <div v-if="data.onExit" class="sm-action sm-exit" title="On Exit">X: {{ data.onExit }}</div>
   </div>
   <Handle type="source" :position="Position.Right" />
   <Handle type="target" :position="Position.Left" />
@@ -351,9 +363,8 @@ const nodeTypes: Record<string, Component> = {
                             <div v-if="nodeProps.data.isInitial" class="sm-initial-dot" title="Initial State"></div>
                             <div class="sm-state-name">{{ nodeProps.data.label }}</div>
                             <div class="sm-state-actions">
-                                <div v-if="nodeProps.data.entry" class="sm-action sm-entry" title="On Entry">E: {{ nodeProps.data.entry }}</div>
-                                <div v-if="nodeProps.data.doAction" class="sm-action sm-do" title="Do">D: {{ nodeProps.data.doAction }}</div>
-                                <div v-if="nodeProps.data.exit" class="sm-action sm-exit" title="On Exit">X: {{ nodeProps.data.exit }}</div>
+                                <div v-if="nodeProps.data.onEntry" class="sm-action sm-entry" title="On Entry">E: {{ nodeProps.data.onEntry }}</div>
+                                <div v-if="nodeProps.data.onExit" class="sm-action sm-exit" title="On Exit">X: {{ nodeProps.data.onExit }}</div>
                             </div>
                             <Handle type="source" :position="Position.Right" />
                             <Handle type="target" :position="Position.Left" />
@@ -382,31 +393,22 @@ const nodeTypes: Record<string, Component> = {
                         />
                     </label>
                     <label class="sm-label">
-                        <span>On Entry</span>
-                        <input
+                        <span>On Entry (one action per line)</span>
+                        <textarea
                             class="sm-input"
-                            :value="selectedStateData.entry ?? ''"
-                            @input="selectedStateData.entry = ($event.target as HTMLInputElement).value; updateStateField('entry', ($event.target as HTMLInputElement).value)"
-                            placeholder="e.g. set_led(0)"
-                        />
+                            :value="selectedStateData.onEntry ?? ''"
+                            @input="selectedStateData.onEntry = ($event.target as HTMLTextAreaElement).value; updateStateField('onEntry', ($event.target as HTMLTextAreaElement).value)"
+                            placeholder="e.g. set(led, on)"
+                        ></textarea>
                     </label>
                     <label class="sm-label">
-                        <span>Do (during)</span>
-                        <input
+                        <span>On Exit (one action per line)</span>
+                        <textarea
                             class="sm-input"
-                            :value="selectedStateData.doAction ?? ''"
-                            @input="selectedStateData.doAction = ($event.target as HTMLInputElement).value; updateStateField('doAction', ($event.target as HTMLInputElement).value)"
-                            placeholder="e.g. sensor_poll()"
-                        />
-                    </label>
-                    <label class="sm-label">
-                        <span>On Exit</span>
-                        <input
-                            class="sm-input"
-                            :value="selectedStateData.exit ?? ''"
-                            @input="selectedStateData.exit = ($event.target as HTMLInputElement).value; updateStateField('exit', ($event.target as HTMLInputElement).value)"
-                            placeholder="e.g. cleanup()"
-                        />
+                            :value="selectedStateData.onExit ?? ''"
+                            @input="selectedStateData.onExit = ($event.target as HTMLTextAreaElement).value; updateStateField('onExit', ($event.target as HTMLTextAreaElement).value)"
+                            placeholder="e.g. set(led, off)"
+                        ></textarea>
                     </label>
                 </template>
 
@@ -431,13 +433,13 @@ const nodeTypes: Record<string, Component> = {
                         />
                     </label>
                     <label class="sm-label">
-                        <span>Action</span>
-                        <input
+                        <span>Actions (one action per line)</span>
+                        <textarea
                             class="sm-input"
-                            :value="selectedEdgeData.action ?? ''"
-                            @input="updateEdgeField('action', ($event.target as HTMLInputElement).value)"
+                            :value="selectedEdgeData.actionsText ?? ''"
+                            @input="updateEdgeField('actionsText', ($event.target as HTMLTextAreaElement).value)"
                             placeholder="e.g. publish(ALERT)"
-                        />
+                        ></textarea>
                     </label>
                 </template>
             </div>
@@ -572,6 +574,11 @@ const nodeTypes: Record<string, Component> = {
     background: var(--bg-input);
     color: var(--text);
     font-size: 0.75rem;
+}
+.sm-input:is(textarea) {
+    min-height: 64px;
+    resize: vertical;
+    font-family: monospace;
 }
 .sm-input:focus {
     outline: none;

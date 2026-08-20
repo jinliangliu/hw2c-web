@@ -133,7 +133,8 @@ class ProjectInfo(BaseModel):
 # ---- Bind YAML models ----
 class BindInterruptInfo(BaseModel):
     pin: str
-    task: str
+    task: str = ""
+    component: Optional[str] = None
     event: str = ""
 
 
@@ -182,5 +183,8 @@ class ParseResponse(BaseModel):
     yaml: str = ""
     hardware_yaml: str = ""
     task_yaml: str = ""
+    components_yaml: str = ""
     bind_yaml: str = ""
+    params_yaml: str = ""
+    pubsub_yaml: str = ""
     warning: Optional[str] = None

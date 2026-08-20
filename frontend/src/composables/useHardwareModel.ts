@@ -49,29 +49,6 @@ export interface PeripheralModel {
     features?: string[]
 }
 
-export interface TaskTrigger {
-    type: 'timer' | 'event' | 'interrupt'
-    /** Event/semaphore name for 'event' type, pin ID for 'interrupt' type, period_ms for 'timer' */
-    source?: string
-    period_ms?: number
-}
-
-export interface TaskSignal {
-    name: string
-    /** Target task name (empty = broadcast) */
-    target?: string
-}
-
-export interface AppTaskModel {
-    name: string
-    priority: number
-    stack_size: number
-    /** 'once' = single-shot, 'loop' = continuous */
-    run_mode: 'once' | 'loop'
-    triggers: TaskTrigger[]
-    signals: TaskSignal[]
-}
-
 export interface WakeupSourceModel {
     type: 'gpio' | 'rtc_alarm' | 'rtc_wakeup' | 'lpuart' | 'iwdg'
     pin?: string
@@ -156,7 +133,6 @@ export interface HardwareModel {
     mcu: McuModel
     pins: PinModel[]
     peripherals: PeripheralModel[]
-    app_tasks: AppTaskModel[]
     sleep: SleepModel | null
     behavior: BehaviorModel | null
     clock: ClockModel | null
@@ -172,7 +148,6 @@ function defaultModel(): HardwareModel {
         mcu: { part: '', core: '', core_clock_mhz: 64, ram_kb: 144, flash_kb: 512, dual_bank: true },
         pins: [],
         peripherals: [],
-        app_tasks: [],
         sleep: null,
         behavior: null,
         clock: null,
@@ -203,19 +178,6 @@ function modelToYaml(model: HardwareModel): string {
             if (p.address != null) o.address = p.address
             if (p.extra && Object.keys(p.extra).length) o.extra = p.extra
             if (p.features && p.features.length) o.features = p.features
-            return o
-        })
-    }
-    if (model.app_tasks.length > 0) {
-        doc.app_tasks = model.app_tasks.map(t => {
-            const o: Record<string, unknown> = {
-                name: t.name,
-                priority: t.priority,
-                stack_size: t.stack_size,
-                run_mode: t.run_mode,
-            }
-            if (t.triggers.length) o.triggers = t.triggers
-            if (t.signals.length) o.signals = t.signals
             return o
         })
     }
@@ -294,16 +256,6 @@ export function yamlToModel(text: string): HardwareModel {
             address: p.address ?? null,
             extra: p.extra ?? undefined,
             features: Array.isArray(p.features) ? p.features : undefined,
-        }))
-
-        const rawTasks = Array.isArray(doc.app_tasks) ? doc.app_tasks : []
-        model.app_tasks = rawTasks.map((t: any) => ({
-            name: String(t.name ?? ''),
-            priority: Number(t.priority ?? 3),
-            stack_size: Number(t.stack_size ?? 512),
-            run_mode: String(t.run_mode ?? 'loop') as 'once' | 'loop',
-            triggers: Array.isArray(t.triggers) ? t.triggers : [],
-            signals: Array.isArray(t.signals) ? t.signals : [],
         }))
 
         model.sleep = doc.sleep ? {
@@ -436,23 +388,6 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         flushToYaml()
     }
 
-    function writeTask(index: number, field: keyof AppTaskModel, value: unknown) {
-        if (index < 0 || index >= model.app_tasks.length) return
-        ;(model.app_tasks[index] as any)[field] = value
-        flushToYaml()
-    }
-
-    function addTask(task: AppTaskModel) {
-        model.app_tasks.push({ ...task })
-        flushToYaml()
-    }
-
-    function removeTask(index: number) {
-        if (index < 0 || index >= model.app_tasks.length) return
-        model.app_tasks.splice(index, 1)
-        flushToYaml()
-    }
-
     function writeSleep(partial: Partial<SleepModel>) {
         if (!model.sleep) model.sleep = { enabled: false, mode: 'SLEEP', enter_on_exit: false, regulator_voltage_scale: 2, flash_power_down: false, wakeup_sources: [] }
         Object.assign(model.sleep, partial)
@@ -495,9 +430,6 @@ export function useHardwareModel(yamlRef: Ref<string>) {
         writePeripheral,
         addPeripheral,
         removePeripheral,
-        writeTask,
-        addTask,
-        removeTask,
         writeSleep,
         writeClock,
         writeFlashPartitions,

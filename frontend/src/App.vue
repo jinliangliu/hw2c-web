@@ -3,7 +3,6 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { ParseResponse } from './api'
 import { uploadNetlist, generateFirmware } from './api'
 import { useHardwareModel } from './composables/useHardwareModel'
-import type { AppTaskModel as HwAppTaskModel } from './composables/useHardwareModel'
 import { useTaskModel } from './composables/useTaskModel'
 import type { AppTaskModel } from './composables/useTaskModel'
 import { useBindModel } from './composables/useBindModel'
@@ -31,7 +30,10 @@ const loading       = ref(false)
 const error         = ref('')
 const hardwareYamlRef = ref('')
 const taskYamlRef     = ref('')
+const componentsYamlRef = ref('')
 const bindYamlRef     = ref('')
+const paramsYamlRef     = ref('')
+const pubsubYamlRef     = ref('')
 const selectedPeriIdx = ref(-1)
 const generating    = ref(false)
 const genError      = ref('')
@@ -39,7 +41,7 @@ const genError      = ref('')
 /** Active tab: 0=Hardware, 1=Tasks, 2=Bind, 3=Behavior, 4=YAML */
 const activeTab = ref<'chip' | 'clock' | 'bank' | 'tasks' | 'bind' | 'behavior' | 'yaml'>('chip')
 
-// ---- Three-layer models ----
+// ---- Six-layer YAML: three layers have structured models; components/params/pubsub are raw YAML for now ----
 const {
     model: hwModel,
     writePin, addPin, removePin,
@@ -66,7 +68,6 @@ const {
 const viewPins         = computed(() => hwModel.pins)
 const viewPeripherals  = computed(() => hwModel.peripherals)
 const viewTasks        = computed(() => taskModel.app_tasks)
-const viewAppTasksHw   = computed(() => hwModel.app_tasks)
 
 const selectedPeripheral = computed(() => {
     if (selectedPeriIdx.value < 0 || selectedPeriIdx.value >= hwModel.peripherals.length) return null
@@ -170,6 +171,9 @@ async function handleParse(netlistFile: File, bomFile?: File) {
         if (data.task_yaml) {
             loadTask(data.task_yaml)
         }
+        componentsYamlRef.value = data.components_yaml || ''
+        paramsYamlRef.value = data.params_yaml || ''
+        pubsubYamlRef.value = data.pubsub_yaml || ''
         if (data.bind_yaml) {
             loadBind(data.bind_yaml)
         } else if (data.bind) {
@@ -181,7 +185,10 @@ async function handleParse(netlistFile: File, bomFile?: File) {
         results.value = null
         hardwareYamlRef.value = ''
         taskYamlRef.value = ''
+        componentsYamlRef.value = ''
         bindYamlRef.value = ''
+        paramsYamlRef.value = ''
+        pubsubYamlRef.value = ''
     } finally {
         loading.value = false
     }
@@ -210,7 +217,10 @@ async function handleGenerate() {
         const blob = await generateFirmware(
             hardwareYamlRef.value,
             taskYamlRef.value,
+            componentsYamlRef.value,
             bindYamlRef.value,
+            paramsYamlRef.value,
+            pubsubYamlRef.value,
         )
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -623,19 +633,31 @@ function handleUpdateFlashPartitions(partitions: import('./composables/useHardwa
                     </div>
                     <div v-if="genError" class="gen-error">{{ genError }}</div>
 
-                    <!-- Triple-pane YAML preview -->
+                    <!-- Six-pane YAML preview -->
                     <div class="yaml-multi-pane">
                         <div class="yaml-pane">
                             <div class="yaml-pane-title">hardware.yaml</div>
                             <YamlEditor v-model="hardwareYamlRef" />
                         </div>
-                        <div class="yaml-pane" v-if="taskYamlRef">
+                        <div class="yaml-pane">
                             <div class="yaml-pane-title">task.yaml</div>
                             <YamlEditor v-model="taskYamlRef" />
                         </div>
                         <div class="yaml-pane">
+                            <div class="yaml-pane-title">components.yaml</div>
+                            <YamlEditor v-model="componentsYamlRef" />
+                        </div>
+                        <div class="yaml-pane">
                             <div class="yaml-pane-title">bind.yaml</div>
                             <YamlEditor v-model="bindYamlRef" />
+                        </div>
+                        <div class="yaml-pane">
+                            <div class="yaml-pane-title">params.yaml</div>
+                            <YamlEditor v-model="paramsYamlRef" />
+                        </div>
+                        <div class="yaml-pane">
+                            <div class="yaml-pane-title">pubsub.yaml</div>
+                            <YamlEditor v-model="pubsubYamlRef" />
                         </div>
                     </div>
                 </div>
@@ -829,15 +851,16 @@ function handleUpdateFlashPartitions(partitions: import('./composables/useHardwa
     margin-bottom: 0.5rem;
 }
 
-/* Triple-pane YAML layout */
+/* Six-pane YAML layout */
 .yaml-multi-pane {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: minmax(180px, 1fr);
     gap: 0.5rem;
     flex: 1;
     min-height: 0;
 }
 .yaml-pane {
-    flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;

@@ -4,7 +4,7 @@
  * Colors match the CSS variables defined in style.css tag-* classes.
  */
 
-import { POWER_PINS, RESERVED_PINS, type PhysicalPin } from './Lqfp64Pinout'
+import { POWER_PINS, RESERVED_PINS } from './Lqfp64Pinout'
 
 export { POWER_PINS, RESERVED_PINS }
 

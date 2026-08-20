@@ -4,7 +4,7 @@
  * Validates AF function conflicts, pin occupation, voltage domain
  * compatibility, and suggests alternative pin assignments.
  */
-import { LQFP64_PINS, LQFP64_MAP, POWER_PINS, RESERVED_PINS, type PhysicalPin, type AfEntry } from './Lqfp64Pinout'
+import { LQFP64_PINS, LQFP64_MAP, RESERVED_PINS, type AfEntry } from './Lqfp64Pinout'
 import { extractBusType } from './BusColorMap'
 
 // ---------------------------------------------------------------------------
@@ -38,25 +38,6 @@ export interface PinSuggestion {
 // ---------------------------------------------------------------------------
 // AF Conflict Detection
 // ---------------------------------------------------------------------------
-
-/**
- * Extract peripheral instance from a function name.
- * "I2C1_SCL" → "I2C1", "SPI2_MOSI" → "SPI2"
- */
-function periInstance(fn: string): string {
-    const idx = fn.indexOf('_')
-    return idx >= 0 ? fn.slice(0, idx) : fn
-}
-
-/**
- * Check if two function names conflict.
- * Same peripheral but same signal = conflict (two SPI1_SCK)
- * Same peripheral different signals = compatible (SPI1_SCK + SPI1_MOSI)
- */
-function functionsConflict(fnA: string, fnB: string): boolean {
-    if (fnA === fnB) return true  // exact same signal
-    return false
-}
 
 /**
  * Detect AF conflicts: two different pins assigned to the same peripheral signal.
@@ -129,9 +110,6 @@ export function checkReservedPins(assignments: PinAssignment[]): ConstraintIssue
 
 /** Pins that are in the VDDA (analog) domain */
 const ANALOG_PINS = new Set(['PA0', 'PA1', 'PA2', 'PA3', 'PA4', 'PA5', 'PA6', 'PA7'])
-
-/** Peripheral types that require analog-capable pins */
-const ANALOG_PERIPHERALS = new Set(['ADC', 'DAC', 'COMP', 'OPAMP'])
 
 /**
  * Check if an analog peripheral is assigned to a non-VDDA-domain pin.
