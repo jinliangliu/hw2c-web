@@ -38,7 +38,11 @@ def main() -> int:
         .replace("__HW2C_PYTHON__", "python")
         .replace("__HW2C_BACKEND__", "backend")
         .replace("__HW2C_ROOT__", "hw2c")
-    )
+        .replace("__HW2C_BUILD_PYTHON__", "build-python")
+        .replace("__HW2C_WORK_ROOT__", "work-root")
+        .replace("__HW2C_ENABLE_FLASH__", "0")
+        .replace("__HW2C_PYOCD__", "")
+        .replace("__HW2C_PYOCD_PYTHON__", ""))
 
     mutants = []
 
@@ -110,6 +114,75 @@ def main() -> int:
         sorted(contract.EXPECTED_TEMPLATES - {"hw2c://artifacts/{request_id}/{filename}"}),
     ))
     add("allow a fourth compile_check state", lambda: contract.assert_compile_state("ok"))
+
+    # --- P3: hardware tools ---
+    add("register hardware tools by default", lambda: contract.assert_flash_tool_set(
+        sorted(set(contract.EXPECTED_TOOLS) | contract.HARDWARE_TOOLS), False
+    ))
+    add("omit a tool when flash is enabled", lambda: contract.assert_flash_tool_set(
+        sorted(contract.HARDWARE_TOOL_SET - {"verify_flash"}), True
+    ))
+    add("enable hardware tools in the shipped config", lambda: contract.assert_connector_meta_is_local_only(
+        meta, {**generated, "mcpServers": {"hw2c-local": {
+            **generated["mcpServers"]["hw2c-local"],
+            "env": {**generated["mcpServers"]["hw2c-local"]["env"], "HW2C_ENABLE_FLASH": "1"},
+        }}}
+    ))
+    add("cut off a full readback at 30 s", lambda: contract.assert_connector_meta_is_local_only(
+        meta, {**generated, "mcpServers": {"hw2c-local": {
+            **generated["mcpServers"]["hw2c-local"], "timeout": 30000,
+        }}}
+    ))
+    image = b"\x00" * 64
+    add("touch pyOCD during an unconfirmed dry-run", lambda: contract.assert_dry_run(
+        {"dry_run": True, "confirm_required": True}, ["pyocd load"]
+    ))
+    add("treat the string 'true' as confirmation", lambda: contract.assert_dry_run(
+        {"dry_run": False, "confirm_required": True, "written": True}, []
+    ))
+    add("leak raw image bytes in a dry-run result", lambda: contract.assert_dry_run(
+        {"dry_run": True, "confirm_required": True, "_image": image}, []
+    ))
+    good_plan = {
+        "artifact": "combined.bin", "address": contract.BOOTLOADER, "slot": "",
+        "region": "bootloader", "erase": "sector", "reset_after": False,
+        "dry_run": True, "sha256": "a" * 64,
+    }
+    add("flash combined.bin into slot B", lambda: contract.assert_flash_plan(
+        {**good_plan, "address": contract.SLOT_B}, "combined.bin", contract.BOOTLOADER, ""
+    ))
+    add("whole-chip erase on a slot write", lambda: contract.assert_flash_plan(
+        {**good_plan, "erase": "chip"}, "combined.bin", contract.BOOTLOADER, ""
+    ))
+    add("accept slot A image for slot B", lambda: contract.assert_slot_link(
+        {"region": "slot_a", "address": contract.SLOT_A}, "B"
+    ))
+    add("write an already-identical image", lambda: contract.assert_write_result(
+        {"dry_run": False, "before_sha256": contract._sha(image),
+         "image_sha256": contract._sha(image), "written": True, "match": True,
+         "reset_performed": False}, image, image, []
+    ))
+    device = bytearray(image)
+    device[3] = 0xFF
+    add("report match despite a differing byte", lambda: contract.assert_verify_result(
+        {"match": True, "first_diff_offset": 3,
+         "image_sha256": contract._sha(image), "device_sha256": contract._sha(bytes(device))},
+        image, bytes(device)
+    ))
+    add("accept replayed serial data without a rate guard", lambda: contract.assert_serial_frame(
+        {"purged_on_open": True, "rate_guard_trips": 0, "text": "REPLAY\r\n"}, replay=True
+    ))
+    add("guess an unknown pyOCD target", lambda: contract.assert_target_is_explicit("auto"))
+    add("reject combined.bin for spanning two regions", lambda: contract.assert_image_fits(
+        {"address": contract.BOOTLOADER, "size": 122668}, contract.SLOT_A
+    ))
+
+    def typed_confirm(request_id: str, artifact: str, confirm: bool = False) -> dict:
+        return {}
+
+    add("let the SDK coerce 'true' into a confirmation", lambda: contract.assert_confirm_is_not_coercible(
+        typed_confirm
+    ))
 
     caught = sum(_expect_raises(label, fn) for label, fn in mutants)
     print(f"\n{caught}/{len(mutants)} mutants caught")

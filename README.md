@@ -356,3 +356,31 @@ cd frontend && npx vue-tsc --noEmit
 # Production build
 cd frontend && npm run build
 ```
+
+---
+
+## Local MCP Connector (WorkBuddy)
+
+The `connector/local` package runs as a **local stdio process** — no network port,
+no token, no marketplace publish. It exposes parse/validate/examples/resources plus
+an async `generate_firmware` → `get_build_status` → `list_artifacts` flow that
+delivers `.elf`/`.bin` with size and sha256.
+
+```bash
+# 1) generate connector/local/mcp.json with THIS machine's absolute paths
+python connector/local/install.py                       # flash tools disabled (default)
+python connector/local/install.py --enable-flash        # opt in to list_probes/flash_firmware/
+                                                        # verify_flash/capture_serial
+# 2) install connector/local as a local Connector in WorkBuddy
+```
+
+`--enable-flash` requires pyOCD on PATH and an interpreter that can `import pyocd`;
+the installer writes `HW2C_PYOCD` / `HW2C_PYOCD_PYTHON` into the generated (gitignored)
+`mcp.json`. Hardware tools are **not registered** without it. Even when registered,
+`flash_firmware` only returns a dry-run plan unless `confirm` is the literal boolean
+`true`; it sector-erases only the target range, reads back before and after writing,
+and leaves the core halted (no automatic reset).
+
+Contract guardrails: `python backend/tests/test_mcp_contract.py` and
+`python backend/tests/mutate_mcp_contract.py` (run with an interpreter that has the
+MCP SDK installed; both have a stdlib runner fallback for pytest-less environments).

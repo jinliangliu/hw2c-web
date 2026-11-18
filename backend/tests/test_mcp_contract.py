@@ -8,9 +8,16 @@ that stays green after mutation is a tautology and must be rewritten.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
+import inspect
 import json
+import os
 import re
+import shutil
+import struct
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,7 +54,7 @@ pytest.importorskip("mcp", reason="MCP SDK is required only for Connector tests"
 
 from mcp_server.server import create_server  # noqa: E402
 from mcp_server import tools as mcp_tools  # noqa: E402
-from services import catalog_service, generate_service as builds  # noqa: E402
+from services import catalog_service, flash_service as flash, generate_service as builds  # noqa: E402
 from services.validate_service import validate_config  # noqa: E402
 
 EXPECTED_TOOLS = {
@@ -102,6 +109,12 @@ def assert_connector_meta_is_local_only(meta: dict, mcp_cfg: dict) -> None:
     assert "command" in cfg and cfg["command"]
     assert cfg.get("cwd"), "Python stdio server needs cwd (v4.22.15+)"
     assert "-m" in cfg.get("args", [])
+    assert cfg.get("env", {}).get("HW2C_ENABLE_FLASH") in ("0", None), (
+        "hardware tools must be opt-in in the shipped Connector config"
+    )
+    assert cfg.get("timeout", 0) >= 180000, (
+        "a full flash readback + verify cannot finish inside WorkBuddy's 30 s default"
+    )
 
 
 def assert_async_envelope(result) -> None:
@@ -188,6 +201,152 @@ def assert_name_check(check) -> None:
         raise AssertionError(f"unsafe name accepted: {bad!r}")
 
 
+# --- P3: hardware tools ---
+SLOT_A, SLOT_B, BOOTLOADER = 0x08002000, 0x08040000, 0x08000000
+HARDWARE_TOOL_SET = {
+    "list_probes", "flash_firmware", "verify_flash", "capture_serial",
+}
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def assert_flash_tool_set(names, enabled: bool) -> None:
+    present = set(names) & HARDWARE_TOOL_SET
+    if enabled:
+        assert present == HARDWARE_TOOL_SET, f"flash tools missing: {sorted(HARDWARE_TOOL_SET - present)}"
+    else:
+        assert not present, f"hardware tools registered by default: {sorted(present)}"
+
+
+def assert_dry_run(result, hardware_calls) -> None:
+    """confirm=false must return a plan and never reach pyOCD/pyserial."""
+    assert isinstance(result, dict)
+    assert result.get("dry_run") is True, "an unconfirmed call tried to write"
+    assert result.get("confirm_required") is True
+    assert "written" not in result and "match" not in result
+    assert not any(key.startswith("_") for key in result), "private image bytes leaked"
+    assert list(hardware_calls) == [], f"pyOCD called during dry-run: {hardware_calls}"
+
+
+def assert_flash_plan(plan, artifact: str, address: int, slot: str) -> None:
+    assert plan["artifact"] == artifact
+    assert int(plan["address"]) == address, f"wrong flash base for {artifact}: {plan['address']}"
+    assert plan["slot"] == slot
+    assert plan["region"] in ("bootloader", "base", "slot_a", "slot_b")
+    assert plan["erase"] == "sector", "whole-chip erase would destroy another slot"
+    assert plan["reset_after"] is False
+    assert plan["dry_run"] is True
+    assert re.fullmatch(r"[0-9a-f]{64}", plan["sha256"])
+
+
+def assert_slot_link(plan, requested_slot: str) -> None:
+    """An image linked for slot A must never be accepted for slot B."""
+    if requested_slot:
+        assert plan["region"] == "slot_" + requested_slot.lower(), (
+            f"{requested_slot} requested but image is linked to {plan['region']}"
+        )
+        assert plan["address"] == (SLOT_A if requested_slot == "A" else SLOT_B)
+    else:
+        assert plan["region"] != "slot_b", "slot B needs an explicit slot argument"
+
+
+def assert_write_result(result, before: bytes, image: bytes, write_calls) -> None:
+    assert result["dry_run"] is False
+    assert result["before_sha256"] == _sha(before), "no readback before writing"
+    assert result["image_sha256"] == _sha(image)
+    assert result["reset_performed"] is False
+    if before == image:
+        assert result["written"] is False and not write_calls, "wrote an already-identical image"
+        assert result["match"] is True
+    else:
+        assert result["written"] is True and write_calls, "erase/write step was skipped"
+        assert result["match"] is True, "no readback after writing"
+        assert result["after_sha256"] == _sha(image)
+
+
+def assert_verify_result(result, image: bytes, device: bytes) -> None:
+    expected = next((i for i, (a, b) in enumerate(zip(device, image)) if a != b), None)
+    if expected is None and len(device) != len(image):
+        expected = min(len(device), len(image))
+    assert result["match"] is (device == image), "compare result contradicts the bytes"
+    assert result["first_diff_offset"] == expected
+    assert result["image_sha256"] == _sha(image)
+    assert result["device_sha256"] == _sha(device)
+    assert "written" not in result, "read-only verify tried to write"
+
+
+def assert_serial_frame(frame, replay: bool = False) -> None:
+    assert frame.get("purged_on_open") is True, "stale adapter buffer was not purged"
+    assert isinstance(frame.get("rate_guard_trips"), int)
+    assert len(frame.get("text", "")) <= flash.MAX_SERIAL_CHARS
+    if replay:
+        assert frame["rate_guard_trips"] > 0, "replay window was accepted as firmware output"
+        assert "REPLAY" not in frame["text"]
+
+
+def assert_target_is_explicit(target: str) -> None:
+    assert target in set(flash.PYOCD_TARGETS.values()), f"guessed pyOCD target: {target!r}"
+    assert target not in ("", "auto", "guess")
+
+
+def assert_image_fits(plan: dict, slot_a_end: int) -> None:
+    """combined.bin is allowed to span the bootloader and slot A, not chip erase."""
+    assert int(plan["address"]) + int(plan["size"]) <= slot_a_end, (
+        f"image does not fit: 0x{int(plan['address']):08X}+{plan['size']}"
+    )
+
+
+def assert_confirm_is_not_coercible(fn) -> None:
+    """A `bool` annotation lets the MCP SDK turn the string 'true' into True."""
+    annotation = inspect.signature(fn).parameters["confirm"].annotation
+    assert annotation in (object, "object"), (
+        f"confirm is annotated {annotation!r}; the SDK coerces strings before our gate"
+    )
+
+
+@contextlib.contextmanager
+def fake_build(reset_handler: int, *, name: str = "combined.bin",
+               part: str = "STM32G0B1RET6", size: int = 64):
+    """A manifest + generated linker scripts, with no build subprocess."""
+    request_id = "1" * 12
+    tmp = Path(tempfile.mkdtemp(prefix="hw2c-p3-contract-"))
+    request_dir = tmp / request_id
+    project = request_dir / "firmware"
+    (project / "build").mkdir(parents=True)
+    (project / "linker").mkdir()
+    image = bytearray(size)
+    struct.pack_into("<I", image, 4, reset_handler)
+    (project / "build" / name).write_bytes(image)
+    regions = {
+        "bootloader.ld": (BOOTLOADER, "8K"),
+        "app_slot_a.ld": (SLOT_A, "248K"),
+        "app_slot_b.ld": (SLOT_B, "248K"),
+    }
+    for filename, (origin, length) in regions.items():
+        (project / "linker" / filename).write_text(
+            f"MEMORY\n{{\n  FLASH (rx) : ORIGIN = {hex(origin)}, LENGTH = {length}\n}}\n",
+            encoding="utf-8",
+        )
+    (request_dir / "hardware.yaml").write_text(f"mcu:\n  part: {part}\n", encoding="utf-8")
+    entry = {"name": name, "size": len(image), "sha256": _sha(bytes(image)), "uri": "hw2c://x"}
+
+    saved_env = dict(os.environ)
+    saved_list, saved_read = builds.list_artifacts, builds.read_artifact
+    os.environ["HW2C_ENABLE_FLASH"] = "1"
+    os.environ["HW2C_WORK_ROOT"] = str(tmp)
+    builds.list_artifacts = lambda _rid: [entry]
+    builds.read_artifact = lambda _rid, _name: bytes(image)
+    try:
+        yield request_id, project, bytes(image)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+        builds.list_artifacts, builds.read_artifact = saved_list, saved_read
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _registered():
     server = create_server()
     tools = asyncio.run(server.list_tools())
@@ -261,7 +420,10 @@ def test_connector_package_declares_no_auth_and_one_stdio_server() -> None:
         .replace("__HW2C_BACKEND__", "backend")
         .replace("__HW2C_ROOT__", "hw2c")
         .replace("__HW2C_BUILD_PYTHON__", "build-python")
-        .replace("__HW2C_WORK_ROOT__", "work-root"))
+        .replace("__HW2C_WORK_ROOT__", "work-root")
+        .replace("__HW2C_ENABLE_FLASH__", "0")
+        .replace("__HW2C_PYOCD__", "")
+        .replace("__HW2C_PYOCD_PYTHON__", ""))
     assert_connector_meta_is_local_only(meta, generated)
 
 
@@ -387,6 +549,141 @@ def test_build_python_is_explicitly_separate_from_mcp_host() -> None:
     source = (BACKEND / "services" / "generate_service.py").read_text(encoding="utf-8")
     cmd_source = source.split("def _build_command", 1)[1].split("\ndef ", 1)[0]
     assert '"--force"' not in cmd_source, "--force would skip the compile check"
+
+
+def test_confirm_cannot_be_coerced_by_the_mcp_sdk() -> None:
+    assert_confirm_is_not_coercible(mcp_tools.flash_firmware)
+
+    def typed_confirm(request_id: str, artifact: str, confirm: bool = False) -> dict:
+        return {}
+
+    with pytest.raises(AssertionError):
+        assert_confirm_is_not_coercible(typed_confirm)
+
+
+def test_flash_tools_are_registered_only_when_enabled() -> None:
+    _, names, _, _ = _registered()
+    assert_flash_tool_set(names, enabled=False)
+    previous = os.environ.get("HW2C_ENABLE_FLASH")
+    os.environ["HW2C_ENABLE_FLASH"] = "1"
+    try:
+        _, names, _, _ = _registered()
+        assert_flash_tool_set(names, enabled=True)
+    finally:
+        if previous is None:
+            os.environ.pop("HW2C_ENABLE_FLASH", None)
+        else:
+            os.environ["HW2C_ENABLE_FLASH"] = previous
+
+
+def test_unconfirmed_flash_is_a_plan_without_any_hardware_call() -> None:
+    calls: list[str] = []
+    original_read, original_write = flash.read_flash, flash._write_flash
+    flash.read_flash = lambda _plan: calls.append("read") or b""
+    flash._write_flash = lambda _plan: calls.append("write")
+    try:
+        with fake_build(0x08000DE5) as (request_id, _, _):
+            plan = mcp_tools.flash_firmware(request_id, "combined.bin", confirm=False)
+            assert_dry_run(plan, calls)
+            assert_flash_plan(plan, "combined.bin", BOOTLOADER, "")
+            truthy_string = mcp_tools.flash_firmware(request_id, "combined.bin", confirm="true")
+            assert_dry_run(truthy_string, calls)
+    finally:
+        flash.read_flash, flash._write_flash = original_read, original_write
+
+
+def test_flash_plan_rejects_an_image_linked_for_another_slot() -> None:
+    with fake_build(0x08005DE5, name="app.bin") as (request_id, _, _):
+        with pytest.raises(flash.FlashError) as exc:
+            flash.plan_flash(request_id, "app.bin", "B", for_write=True)
+        assert exc.value.code == "E_FORBIDDEN"
+        with pytest.raises(flash.FlashError):
+            flash.plan_flash(request_id, "app.bin", for_write=True)
+        accepted = flash.plan_flash(request_id, "app.bin", "A", for_write=True)
+        assert_slot_link(accepted, "A")
+        assert_flash_plan(accepted, "app.bin", SLOT_A, "A")
+        # verify is read-only: it may auto-locate the slot from the vector table.
+        verified = flash.plan_flash(request_id, "app.bin", for_write=False)
+        assert_slot_link(verified, "")
+        assert_flash_plan(verified, "app.bin", SLOT_A, "A")
+
+
+def test_combined_image_may_span_bootloader_and_slot_a() -> None:
+    with fake_build(0x08000DE5, size=16 * 1024) as (request_id, _, _):
+        plan = flash.plan_flash(request_id, "combined.bin", for_write=True)
+        assert_flash_plan(plan, "combined.bin", BOOTLOADER, "")
+        assert_image_fits(plan, SLOT_B)
+
+
+def test_flash_compares_before_writing_and_after_writing() -> None:
+    with fake_build(0x08000DE5) as (request_id, _, image):
+        plan = flash.plan_flash(request_id, "combined.bin", for_write=True)
+        different = bytearray(image)
+        different[10] ^= 0xFF
+        sequence = iter([bytes(different), image])
+        writes: list[str] = []
+        original_read, original_write = flash.read_flash, flash._write_flash
+        flash.read_flash = lambda _plan: next(sequence)
+        flash._write_flash = lambda _plan: writes.append("write")
+        try:
+            result = flash.flash(plan)
+            assert_write_result(result, bytes(different), image, writes)
+            writes.clear()
+            flash.read_flash = lambda _plan: image
+            same = flash.flash(plan)
+            assert_write_result(same, image, image, writes)
+        finally:
+            flash.read_flash, flash._write_flash = original_read, original_write
+
+
+def test_verify_flash_reports_first_differing_byte() -> None:
+    with fake_build(0x08000DE5) as (request_id, _, image):
+        device = bytearray(image)
+        device[7] = 0x5A
+        original_read = flash.read_flash
+        flash.read_flash = lambda _plan: bytes(device)
+        try:
+            result = mcp_tools.verify_flash(request_id, "combined.bin")
+            assert_verify_result(result, image, bytes(device))
+        finally:
+            flash.read_flash = original_read
+
+
+def test_serial_port_validation_and_replay_guard() -> None:
+    for bad in ("", "COM0", "/etc/passwd;rm", "COM5;ls"):
+        with pytest.raises(flash.FlashError):
+            flash.capture_serial(bad)
+    with pytest.raises(flash.FlashError):
+        flash.capture_serial("COM5", seconds=999)
+    with pytest.raises(flash.FlashError):
+        flash.capture_serial("COM5", trigger="(")
+    assert_serial_frame({
+        "purged_on_open": True, "rate_guard_trips": 0, "text": "System ready\r\n",
+    })
+    assert_serial_frame({
+        "purged_on_open": True, "rate_guard_trips": 2, "text": "System ready\r\n",
+    }, replay=True)
+
+
+def test_pyocd_target_is_derived_from_hardware_yaml_not_guessed() -> None:
+    with fake_build(0x080005DE5) as (_, project, _):
+        assert_target_is_explicit(flash._target(project))
+    with fake_build(0x080005DE5, part="STM32F999XYZ") as (_, project, _):
+        with pytest.raises(flash.FlashError) as exc:
+            flash._target(project)
+        assert exc.value.code == "E_FORBIDDEN"
+
+
+def test_connector_opt_in_and_skill_describe_hardware_safety() -> None:
+    template = (WEB_ROOT / "connector" / "local" / "mcp.json.template").read_text(encoding="utf-8")
+    for placeholder in ("__HW2C_ENABLE_FLASH__", "__HW2C_PYOCD__", "__HW2C_PYOCD_PYTHON__"):
+        assert placeholder in template, f"installer cannot configure {placeholder}"
+    skill = (WEB_ROOT / "connector" / "local" / "skills" / "hw2c-firmware" / "SKILL.md").read_text(encoding="utf-8")
+    for tool in HARDWARE_TOOL_SET:
+        assert tool in skill, f"SKILL.md does not mention {tool}"
+    assert "confirm" in skill and "布尔 true" in skill, "model must not treat a string as confirmation"
+    assert "combined.bin" in skill and "槽 B" in skill
+    assert "rate_guard_trips" in skill
 
 
 if __name__ == "__main__":

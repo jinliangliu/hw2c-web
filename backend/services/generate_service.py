@@ -485,6 +485,19 @@ def list_artifacts(request_id: str) -> list[dict]:
         return [dict(item) for item in task["artifact_manifest"]]
 
 
+def _project_dirs(request_id: str) -> list[Path]:
+    """Generated project directories inside one isolated request workspace."""
+    request_id = _check_request_id(request_id)
+    root = (work_root() / request_id).resolve()
+    if not root.is_dir():
+        return []
+    return [
+        path for path in sorted(root.iterdir())
+        if path.is_dir() and path.name != "__pycache__"
+        and path.resolve().parent == root
+    ]
+
+
 def read_artifact(request_id: str, filename: str) -> bytes:
     """Read one artifact for an MCP resource; only manifest entries are allowed."""
     request_id = _check_request_id(request_id)
@@ -492,11 +505,7 @@ def read_artifact(request_id: str, filename: str) -> bytes:
     allowed = {item["name"] for item in list_artifacts(request_id)}
     if filename not in allowed:
         raise BuildError("E_FORBIDDEN", f"artifact not in manifest: {filename!r}")
-    project_dirs = [
-        path for path in (work_root() / request_id).iterdir()
-        if path.is_dir() and path.name != "__pycache__"
-    ] if (work_root() / request_id).is_dir() else []
-    for project in project_dirs:
+    for project in _project_dirs(request_id):
         path = (project / "build" / filename).resolve()
         if (project / "build").resolve() == path.parent and path.is_file():
             return path.read_bytes()

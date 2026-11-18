@@ -9,9 +9,12 @@
         "HW2C_ROOT": "__HW2C_ROOT__",
         "HW2C_BUILD_PYTHON": "__HW2C_BUILD_PYTHON__",
         "HW2C_WORK_ROOT": "__HW2C_WORK_ROOT__",
+        "HW2C_ENABLE_FLASH": "__HW2C_ENABLE_FLASH__",
+        "HW2C_PYOCD": "__HW2C_PYOCD__",
+        "HW2C_PYOCD_PYTHON": "__HW2C_PYOCD_PYTHON__",
         "PYTHONIOENCODING": "utf-8"
       },
-      "timeout": 30000
+      "timeout": 180000
     }
   }
 }

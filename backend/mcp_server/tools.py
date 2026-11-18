@@ -7,7 +7,9 @@ model polls for status.  Flashing tools stay unregistered until P3.
 
 from __future__ import annotations
 
-from services import catalog_service, generate_service, parse_service, validate_service
+from services import (
+    catalog_service, flash_service, generate_service, parse_service, validate_service,
+)
 
 _TOOL_DESCRIPTIONS = {
     "parse_eda": (
@@ -41,6 +43,26 @@ _TOOL_DESCRIPTIONS = {
     "list_artifacts": (
         "列出某次构建的可执行固件产物（name/size/sha256/uri）。"
         "uri 可用 hw2c://artifacts/ 资源读取；构建未完成或无产物时返回空列表。"
+    ),
+    "list_probes": (
+        "列出本机接入的调试探针（pyOCD，只读）。只有 HW2C_ENABLE_FLASH=1 时注册。"
+    ),
+    "flash_firmware": (
+        "把某次构建的镜像烧到本机板子。confirm 必须为布尔 true 才会真正写 flash；"
+        "否则只返回 dry-run 计划（目标地址/镜像 sha256），绝不调用 pyOCD。"
+        "带 bootloader 的工程用 combined.bin 烧 0x08000000；应用镜像必须显式 slot='A'|'B'，"
+        "且镜像的 Reset_Handler 必须落在该槽区间（槽 B 需单独按槽 B 基址链接的构建）。"
+        "写前回读对拍，一致则不写；写后再逐字节校验；烧完保持停机、不自动复位。"
+    ),
+    "verify_flash": (
+        "只读回读 flash，与某次构建的镜像逐字节对拍（含 sha256 与首个差异偏移）。"
+        "传 request_id 与 artifact；应用镜像可传 slot='A'|'B'，省略时按向量表自动定位。"
+    ),
+    "capture_serial": (
+        "只读抓取本机串口一段时间的文本（不向设备写任何字节）。"
+        "port 形如 COM5 或 /dev/ttyACM0，seconds 最大 30；可选 trigger 为正则，"
+        "返回是否命中。返回中带物理速率自检结果与首包 purge 标志："
+        "rate_guard_trips>0 表示该窗口是主机侧陈旧缓冲回放，不可当成固件输出。"
     ),
 }
 
@@ -114,13 +136,67 @@ def list_artifacts(request_id: str) -> list[dict]:
         return [_fail(exc.code, exc.message)]
 
 
-TOOLS = (
+def _hardware_error(exc: Exception) -> dict:
+    code = getattr(exc, "code", "E_INTERNAL")
+    message = getattr(exc, "message", "hardware tool error")
+    return _fail(code, message)
+
+
+def list_probes() -> dict:
+    """Enumerate attached debug probes (read-only)."""
+    try:
+        return flash_service.list_probes()
+    except (flash_service.FlashError, generate_service.BuildError) as exc:
+        return _hardware_error(exc)
+
+
+def flash_firmware(request_id: str, artifact: str, slot: str = "",
+                   # Deliberately untyped: a `bool` annotation lets the MCP SDK
+                   # coerce the string "true" into True before we see it.  Only
+                   # the literal JSON boolean is a confirmation.
+                   confirm: object = False) -> dict:
+    """Dry-run unless confirm is exactly True; write only after a readback check."""
+    try:
+        plan = flash_service.plan_flash(request_id, artifact, slot, for_write=True)
+        if confirm is not True:
+            return flash_service.public_plan(plan)
+        return flash_service.flash(plan)
+    except (flash_service.FlashError, generate_service.BuildError) as exc:
+        return _hardware_error(exc)
+
+
+def verify_flash(request_id: str, artifact: str, slot: str = "") -> dict:
+    """Read flash and compare byte-for-byte with a build artifact."""
+    try:
+        return flash_service.verify_flash(request_id, artifact, slot)
+    except (flash_service.FlashError, generate_service.BuildError) as exc:
+        return _hardware_error(exc)
+
+
+def capture_serial(port: str, seconds: float = 5.0, trigger: str = "") -> dict:
+    """Read a serial port without transmitting; guard against stale replay."""
+    try:
+        return flash_service.capture_serial(port, seconds, trigger)
+    except (flash_service.FlashError, generate_service.BuildError) as exc:
+        return _hardware_error(exc)
+
+
+BASE_TOOLS = (
     parse_eda, validate_config, list_examples, get_example, get_mcu_pinout,
     generate_firmware, get_build_status, list_artifacts,
 )
+FLASH_TOOLS = (list_probes, flash_firmware, verify_flash, capture_serial)
+
+
+def active_tools() -> tuple:
+    """Hardware tools are opt-in; the default server never exposes them."""
+    return BASE_TOOLS + (FLASH_TOOLS if flash_service.enabled() else ())
+
+
+TOOLS = active_tools()
 
 
 def register_tools(mcp) -> None:
-    """Register the P1+P2 tool set on an MCP server instance."""
-    for fn in TOOLS:
+    """Register the tool set enabled for this process."""
+    for fn in active_tools():
         mcp.add_tool(fn, description=_TOOL_DESCRIPTIONS[fn.__name__])
