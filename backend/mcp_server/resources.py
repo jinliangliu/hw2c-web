@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from services import catalog_service
+from services import catalog_service, generate_service
 
 _FORMATS = ("fota_format", "ymodem_format")
 
@@ -92,3 +92,12 @@ def register_resources(mcp) -> None:
     )
     def peripheral_model(name: str) -> str:
         return catalog_service._safe_read(catalog_service._HW2C_ROOT / "models", name)
+
+    @mcp.resource(
+        "hw2c://artifacts/{request_id}/{filename}",
+        name="hw2c build artifact",
+        description="某次构建产出的固件镜像（.elf/.bin/.hex/.map），仅 manifest 内的文件可读",
+        mime_type="application/octet-stream",
+    )
+    def build_artifact(request_id: str, filename: str) -> bytes:
+        return generate_service.read_artifact(request_id, filename)

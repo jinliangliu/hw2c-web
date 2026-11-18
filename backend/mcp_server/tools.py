@@ -1,13 +1,13 @@
 """MCP tool implementations.
 
-P1 registers read-only tools only.  Generation and flashing tools land in P2/P3;
-registering them early would expose a tool whose backing executor does not exist
-yet — worse than not exposing it at all.
+Generation tools are asynchronous: the 30 s WorkBuddy tool timeout is shorter
+than a real hw2c build (60–180 s), so the executor returns a request_id and the
+model polls for status.  Flashing tools stay unregistered until P3.
 """
 
 from __future__ import annotations
 
-from services import catalog_service, parse_service, validate_service
+from services import catalog_service, generate_service, parse_service, validate_service
 
 _TOOL_DESCRIPTIONS = {
     "parse_eda": (
@@ -25,6 +25,22 @@ _TOOL_DESCRIPTIONS = {
     "get_mcu_pinout": (
         "查询指定 MCU 型号在自带示例中出现过的引脚分配（含 AF）。"
         "未知型号返回空列表，绝不臆造引脚。"
+    ),
+    "generate_firmware": (
+        "用六层 YAML 生成并编译固件，异步执行。立即返回 request_id（不等待编译），"
+        "随后用 get_build_status 轮询。layers 形如 {hardware, task?, components?, "
+        "bind?, params?, pubsub?}，值为 YAML 文本；project_name 只是产物目录名。"
+        "不接受输出路径或 --force；编译检查绝不会被跳过。"
+    ),
+    "get_build_status": (
+        "查询 generate_firmware 的异步构建状态：status 为 queued/running/"
+        "succeeded/failed，compile_check 为 passed/failed/skipped，"
+        "succeeded 时附 artifact_manifest（.elf/.bin 的 size 与 sha256）。"
+        "每 2 秒轮询一次，最多 180 秒。"
+    ),
+    "list_artifacts": (
+        "列出某次构建的可执行固件产物（name/size/sha256/uri）。"
+        "uri 可用 hw2c://artifacts/ 资源读取；构建未完成或无产物时返回空列表。"
     ),
 }
 
@@ -74,10 +90,37 @@ def get_mcu_pinout(part: str) -> dict:
         return _fail("E_FORBIDDEN", str(exc))
 
 
-TOOLS = (parse_eda, validate_config, list_examples, get_example, get_mcu_pinout)
+def generate_firmware(layers: dict[str, str], project_name: str = "firmware") -> dict:
+    """Queue an isolated firmware build; return a request_id immediately."""
+    try:
+        return generate_service.submit_build(layers, project_name)
+    except generate_service.BuildError as exc:
+        return _fail(exc.code, exc.message)
+
+
+def get_build_status(request_id: str) -> dict:
+    """Poll an asynchronous build without blocking."""
+    try:
+        return generate_service.get_status(request_id)
+    except generate_service.BuildError as exc:
+        return _fail(exc.code, exc.message)
+
+
+def list_artifacts(request_id: str) -> list[dict]:
+    """List executable images from a finished build."""
+    try:
+        return generate_service.list_artifacts(request_id)
+    except generate_service.BuildError as exc:
+        return [_fail(exc.code, exc.message)]
+
+
+TOOLS = (
+    parse_eda, validate_config, list_examples, get_example, get_mcu_pinout,
+    generate_firmware, get_build_status, list_artifacts,
+)
 
 
 def register_tools(mcp) -> None:
-    """Register the P1 tool set on an MCP server instance."""
+    """Register the P1+P2 tool set on an MCP server instance."""
     for fn in TOOLS:
         mcp.add_tool(fn, description=_TOOL_DESCRIPTIONS[fn.__name__])

@@ -16,13 +16,16 @@ from mcp_server.tools import register_tools
 
 
 def create_server():
-    """Build the server with the P1 tool/resource set."""
+    """Build the server with the P1+P2 tool/resource set."""
     server = MCPServer(
         name="hw2c-local",
         instructions=(
             "hw2c 把用户定义的硬件资源转成基于 FreeRTOS 的 STM32 固件。"
             "先用 parse_eda 从网表得到六层 YAML，用 validate_config 校验，"
-            "再用 resources 读需求/格式真源。生成与烧录工具在后续阶段提供。"
+            "再用 resources 读需求/格式真源。"
+            "生成固件用 generate_firmware（异步，立即返回 request_id），"
+            "之后每 2 秒用 get_build_status 轮询，最多 180 秒；"
+            "成功后再用 list_artifacts 拿 .elf/.bin。烧录工具尚未注册。"
         ),
     )
     register_tools(server)
