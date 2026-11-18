@@ -499,11 +499,11 @@ def test_named_check_rejects_traversal() -> None:
 
 def test_stderr_is_sanitized_into_short_issues() -> None:
     raw = (
-        "Error processing line 7 of C:\\Users\\pc\\anaconda3\\pywin32.pth:\n"
+        "Error processing line 7 of C:\\Users\\builder\\anaconda3\\pywin32.pth:\n"
         "  Traceback (most recent call last):\n"
         "    ModuleNotFoundError: No module named 'pywin32_bootstrap'\n"
         "Remainder of file ignored\n"
-        "CMake Error at C:/Users/pc/Documents/project/CMakeLists.txt:12:\n"
+        "CMake Error at C:/Users/builder/Documents/project/CMakeLists.txt:12:\n"
         "  error: unknown target\n"
     )
     issues = builds.sanitize_stderr(raw)

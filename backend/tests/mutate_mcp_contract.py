@@ -89,7 +89,7 @@ def main() -> int:
     add("let the caller choose the output directory", lambda: contract.assert_no_force([
         "python", "-m", "parser.cli", "gen", "-o", "/etc/firmware",
     ]))
-    raw = "CMake Error at C:/Users/pc/project/CMakeLists.txt:12: error: unknown target"
+    raw = "CMake Error at C:/Users/builder/project/CMakeLists.txt:12: error: unknown target"
     add("pass raw stderr through to the model", lambda: contract.assert_sanitized(
         [{"code": "E", "message": raw, "location": ""}], raw
     ))
