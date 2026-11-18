@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "hw2c-local": {
+      "type": "stdio",
+      "command": "__HW2C_PYTHON__",
+      "args": ["-m", "hw2c_connector.local"],
+      "cwd": "__HW2C_BACKEND__",
+      "env": {
+        "HW2C_ROOT": "__HW2C_ROOT__",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "timeout": 30000
+    }
+  }
+}

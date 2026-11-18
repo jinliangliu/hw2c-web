@@ -14,3 +14,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Machine-specific generated Connector config (see connector/local/install.py)
+connector/local/mcp.json

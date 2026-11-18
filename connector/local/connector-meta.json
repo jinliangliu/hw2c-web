@@ -1,0 +1,22 @@
+{
+  "name": "hw2c 固件构建",
+  "name_zh": "hw2c 固件构建",
+  "name_en": "hw2c Firmware Builder",
+  "description": "把 EDA 网表与 BOM 转成 FreeRTOS 固件配置：解析、校验、读取六层 YAML 契约与示例。",
+  "description_zh": "在本机把 EDA 网表与 BOM 解析成 hw2c 六层配置，校验配置并读取需求、schema 与示例知识。",
+  "description_en": "Parse EDA netlists into hw2c six-layer YAML on your machine, validate configs, and read requirements, schemas and examples.",
+  "source": "hw2c-local",
+  "type": "mcp",
+  "version": "0.1.0",
+  "minWorkbuddyVersion": "4.22.15",
+  "examples_zh": [
+    "把这个 .enet 网表和 BOM 解析成 hw2c 六层 YAML",
+    "检查这份 hardware.yaml 和 bind.yaml 有没有跨层引用错误",
+    "STM32G0B1RET6 在自带示例里用了哪些引脚和 AF"
+  ],
+  "examples_en": [
+    "Parse this .enet netlist and BOM into hw2c six-layer YAML",
+    "Check this hardware.yaml and bind.yaml for cross-layer reference errors",
+    "Which pins and AFs are used for STM32G0B1RET6 in the bundled examples"
+  ]
+}

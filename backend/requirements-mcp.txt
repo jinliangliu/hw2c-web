@@ -1,0 +1,3 @@
+# Local stdio Connector only. Not needed by the FastAPI Web backend.
+# MCP SDK 2.x exposes MCPServer; the adapter also accepts 1.x FastMCP.
+mcp>=2,<3
